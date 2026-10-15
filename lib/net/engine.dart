@@ -82,7 +82,10 @@ class Engine {
   final _alerts = <String, Alert>{};
   final _jobs = <String, Job>{};
   final _invites = <String, Map<String, dynamic>>{};
-  final _outgoingInvites = <String, Set<String>>{};
+  /// Group id -> invited node -> when. Kept on disk so an acceptance that
+  /// arrives after a restart still admits the person.
+  final _outgoingInvites = <String, Map<String, int>>{};
+  static const _inviteTtl = Duration(days: 14);
   final _peerBps = <String, int>{};
 
   final _changes = StreamController<Set<String>>.broadcast();
@@ -149,6 +152,7 @@ class Engine {
     db.recoverDeliveries();
     await _loadTombstones();
     _loadInvites();
+    _loadOutgoingInvites();
     _bindStarted = DateTime.now();
     _applyNetOptions();
     try {
@@ -963,10 +967,13 @@ class Engine {
         final gid = m['id'] as String? ?? '';
         final g = db.group(gid);
         final pending = _outgoingInvites[gid];
-        if (g != null &&
-            g.owner == me.id &&
-            pending != null &&
-            pending.remove(from)) {
+        final invitedAt = pending?[from];
+        final fresh = invitedAt != null && nowMs() - invitedAt < _inviteTtl.inMilliseconds;
+        if (invitedAt != null) {
+          pending!.remove(from);
+          _saveOutgoingInvites();
+        }
+        if (g != null && g.owner == me.id && fresh) {
           await updateGroup(
             gid,
             (x) => x.copyWith(members: {...x.members, from}.toList()),
@@ -3903,7 +3910,8 @@ class Engine {
     final g = db.group(groupId);
     if (g == null || g.owner != me.id) return;
     for (final id in ids.where((id) => id != me.id && !g.has(id))) {
-      (_outgoingInvites[g.id] ??= {}).add(id);
+      (_outgoingInvites[g.id] ??= {})[id] = nowMs();
+      _saveOutgoingInvites();
       await _sendOrQueue('ginvite:${g.id}:$id', id, {
         't': 'ginvite',
         'id': g.id,
@@ -3964,6 +3972,38 @@ class Engine {
 
   void _saveInvites() {
     db.setKv('ginvites', jsonEncode(_invites));
+  }
+
+  void _loadOutgoingInvites() {
+    try {
+      final raw = db.getKv('goutvites');
+      if (raw == null) return;
+      final cutoff = nowMs() - _inviteTtl.inMilliseconds;
+      for (final g in (jsonDecode(raw) as Map).entries) {
+        if (g.value is! Map) continue;
+        final peers = <String, int>{
+          for (final p in (g.value as Map).entries)
+            if (p.value is num && (p.value as num) > cutoff) '${p.key}': (p.value as num).toInt(),
+        };
+        if (peers.isNotEmpty) _outgoingInvites['${g.key}'] = peers;
+      }
+    } catch (_) {}
+  }
+
+  void _saveOutgoingInvites() {
+    _outgoingInvites.removeWhere((_, v) => v.isEmpty);
+    db.setKv('goutvites', jsonEncode(_outgoingInvites));
+  }
+
+  /// People invited to [groupId] who have not answered yet.
+  List<String> pendingInvites(String groupId) => (_outgoingInvites[groupId] ?? const {}).keys.toList();
+
+  /// Withdraws an invitation; a later acceptance is ignored.
+  void revokeGroupInvite(String groupId, String peer) {
+    _outgoingInvites[groupId]?.remove(peer);
+    _saveOutgoingInvites();
+    db.deleteOutbox('ginvite:$groupId:$peer');
+    _emit({Ch.groups});
   }
 
   Future<void> respondGroupInvite(String id, bool accept) async {

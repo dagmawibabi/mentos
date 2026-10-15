@@ -23,6 +23,9 @@ class TestNetwork {
   final nodes = <String, TestTransport>{};
   final messages = <({String from, String to, Map<String, dynamic> body})>[];
   bool dropAcks = false;
+
+  /// topic -> node ids that joined it, for in-process gossip.
+  final topics = <String, Set<String>>{};
   Completer<bool>? sendGate;
 }
 
@@ -80,11 +83,29 @@ class TestTransport implements Transport {
   @override
   Future<String?> addTicket(String ticket) async => null;
   @override
-  Future<void> join(String topic, List<String> bootstrap) async {}
+  Future<void> join(String topic, List<String> bootstrap) async {
+    network.topics.putIfAbsent(topic, () => <String>{}).add(id);
+  }
+
   @override
-  Future<void> leave(String topic) async {}
+  Future<void> leave(String topic) async {
+    network.topics[topic]?.remove(id);
+  }
+
+  /// Delivers to every other online node on the topic, like a gossip swarm
+  /// where everyone is a neighbour.
   @override
-  Future<bool> broadcast(String topic, Uint8List data) async => false;
+  Future<bool> broadcast(String topic, Uint8List data) async {
+    if (!online || !started) return false;
+    var any = false;
+    for (final peer in network.topics[topic] ?? const <String>{}) {
+      final n = network.nodes[peer];
+      if (peer == id || n == null || !n.online || !n.started) continue;
+      n.controller.add(GossipEvent(topic, id, data));
+      any = true;
+    }
+    return any;
+  }
   @override
   Future<String> importBlob(String path) async => throw UnimplementedError();
   @override
