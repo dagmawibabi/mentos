@@ -4,7 +4,7 @@ Mentos has no central server. Content lives on the device that made it, and it r
 
 This document turns the feature list and the manifesto into ordered, buildable work. Each item says what "done" means and which layer it touches: **Core** (the Rust iroh node plus the Dart protocol engine, which together should become the reusable *Mentos Core*) or **App** (Flutter UI).
 
-Status: ✅ shipped on this branch · 🚧 partial · 📐 designed, not built · ⏳ later
+Status: ✅ built and tested · 🚧 partly built · 📐 designed, not built · ⏳ later
 
 ## 0. Architecture: App and Core
 
@@ -12,69 +12,74 @@ Goal: other apps can be built on the same core.
 
 | Layer | Contents today | Target |
 |---|---|---|
-| `native/` (Rust) | iroh endpoint, direct ALPN, blob ALPN, gossip | `mentos-core` crate: same, plus diagnostics, privacy transports, calls/streams ALPN |
+| `native/` (Rust) | iroh endpoint, direct ALPN, blob ALPN, gossip, diagnostics, privacy transports | `mentos-core` crate: same, plus calls/streams ALPN |
 | `lib/net`, `lib/data` (Dart) | Engine (protocol, auth, sync, delivery), encrypted SQLite, media store | `mentos_core` Dart package with no Flutter imports, consumed by the app |
 | `lib/features`, `lib/widgets` | UI | stays in the app |
 
-Steps: 📐 move `lib/net`, `lib/data`, `lib/core/crypto` into `packages/mentos_core` once the Engine is split by domain (social, chat, spaces, files, network). New features in this roadmap go in their own files so the split is mechanical.
+📐 Move `lib/net`, `lib/data` and `lib/core/crypto` into `packages/mentos_core` once the Engine is split by domain (social, chat, spaces, files, network). New code is already going into separate files that use only the Engine's public surface (`engine_net.dart`, `engine_data.dart`), so they can move as they are.
 
-## 1. Iroh core improvements
+## 1. Iroh core
 
-| Feature | Plan | Status |
+| Feature | What was built | Status |
 |---|---|---|
-| Network diagnostics | Expose iroh's net report (UDP v4/v6, NAT mapping type, public addresses, captive portal, latency to every relay, preferred relay), home relay connection state, bound sockets, and per-connection QUIC stats (RTT, cwnd, bytes, loss, congestion events, path list). Diagnostics screen with a one-tap shareable report. | ✅ |
-| Stronger anonymity | Three privacy levels: **Standard** (direct + relay), **Hide my IP** (relay-only: no IP transports, so peers never learn your address), **Tor** (relay-only, and relay/DNS traffic goes through a local Tor HTTP proxy such as Orbot on `127.0.0.1:8118`, so the relay sees a Tor exit instead of you). | ✅ |
-| Node explorer | Every node on the map opens a detail page: identity, relationship, routes, live RTT, traffic counters, topics shared, items served, kept copies, ping. | ✅ |
-| Local discovery | mDNS address lookup so phones on the same Wi-Fi connect with no internet. | 📐 |
-| Custom relays | Let users add/self-host relays; show which relay each peer uses. | 📐 |
-| iroh-blobs | Replace the custom blob ALPN with iroh-blobs for resumable, range-verified (BLAKE3) transfers and multi-source downloads (torrent-style). Unlocks pause/resume across restarts. | 📐 |
-| iroh-docs | Use for opt-in replication ("let others store my stuff"): range-based set reconciliation instead of full re-queries. | ⏳ |
+| Network diagnostics | Native `mentos_diagnostics` exposes iroh's net report (UDP v4/v6, NAT mapping behaviour, public addresses, captive portal, latency to every relay, preferred relay), home relay state, bound sockets, and per-connection QUIC stats (RTT, congestion window, bytes, loss, path list, known addresses). Diagnostics screen with a plain-language summary and a shareable report (peer ids shortened). Verified against live n0 relays. | ✅ |
+| Stronger anonymity | Privacy modes chosen before the endpoint binds: **Standard**; **Hide my IP** (relay only: no IP sockets, so peers never learn your address); **Tor** (relay only, with relay and DNS traffic through a local HTTP CONNECT proxy such as Orbot on `127.0.0.1:8118`). Verified: in Tor mode the node binds no local sockets, its ticket carries only a relay address, and two nodes still connect and ping. | ✅ |
+| Node explorer | Every node opens a detail page: relationship, route diagram, ping with history, traffic and loss, known addresses, shared gossip topics, custody in both directions, identity. | ✅ |
+| Local discovery | mDNS address lookup so phones on the same Wi-Fi connect without internet. | 📐 |
+| Custom relays | Let people add or self-host relays; show which relay each peer uses. | 📐 |
+| iroh-blobs | Replace the custom blob protocol with iroh-blobs: resumable, BLAKE3-verified ranges and downloading from several seeders at once. Needed for pause/resume that survives a restart. | 📐 |
+| iroh-docs | Range-based set reconciliation for opt-in replication instead of full re-queries. | ⏳ |
 
-## 2. Social experience (Instagram / X / Telegram / Threads)
+## 2. Social (Instagram, X, Telegram, Threads)
 
-| Feature | Plan | Status |
+| Feature | What was built | Status |
 |---|---|---|
-| View counters | Views on every feed post and channel post. Groups: "Seen by" list with names and times, like Telegram. | ✅ |
-| Story reactions | Quick emoji reactions on stories, delivered to the author and shown in the viewer list. | ✅ |
-| Story stickers | Emoji, text, link, mention and location-free "question" stickers placed on the story; link stickers open the link, mention stickers open the profile. | ✅ |
-| Channels (Telegram-style) | One-to-many broadcast with subscribe/unsubscribe, subscriber count, per-post views, pinned post, comments on/off, silent posts, a directory of channels from people you know. | ✅ |
-| Notifications | Real OS notifications with per-category switches (DMs, groups, mentions, replies, likes, follows, invites, transfers, stories), message previews on/off, quiet hours. | ✅ |
-| Existing | Feed, stories, likes, bookmarks, comments, replies, reposts, polls, DMs, group chats, spaces with channels and forums, broadcasts. | ✅ |
-| Threads-style polish | Quote posts, thread composer (multi-part post), "replies" tab on profiles. | 📐 |
-| Hashtags & mentions | Tappable `#tag` / `@name`, local tag pages. | 📐 |
+| View counters | A post counts a view after a moment on screen, like an impression. Cards show the count; authors see who viewed. Views now carry the same keep consent as likes, so counts survive restarts. | ✅ |
+| Seen by (groups) | Delivery records when each recipient confirmed and read a message. Group message info lists readers with times, then delivered, then waiting. | ✅ |
+| Story reactions | Reaction bar (❤️ 😂 😮 😢 🔥 👏). Fixed two bugs: reactions on stories were rejected by every recipient, and likes, views and reactions went to the viewer's followers instead of the story's author. | ✅ |
+| Story stickers and links | Emoji, text, link, @mention and question stickers; drag, pinch and long-press to remove. Links open after a confirmation; only http/https are accepted. | ✅ |
+| Story replies | Replies and answers to questions land in the author's DMs with a header showing what they answer. | ✅ |
+| Channels | Signed subscriptions the owner can count, subscribe/leave/mute, pinned post, comments on/off, silent posts, view counts, channel directory. Comments-off is enforced in the UI only so far. | ✅ |
+| Notifications | OS notifications per category (DMs, groups, mentions, replies, likes, followers, stories, channels, invitations, transfers), previews on/off, quiet hours, muted chats (mentions still get through). | ✅ |
+| Background delivery | Notifications only arrive while the app process is alive. A foreground service (Android) would keep the node running. | 📐 |
+| Already there | Feed, stories, likes, bookmarks, comments, replies, reposts, polls, DMs, group chats, spaces with channels and forums. | ✅ |
+| Threads-style polish | Quote posts, multi-part thread composer, a Replies tab on profiles. | 📐 |
+| Hashtags and mentions in posts | Tappable `#tag` and `@name`, local tag pages. Mentions already trigger notifications. | 🚧 |
 
-## 3. User control and nerdy tools
+## 3. Control and nerdy tools
 
-| Feature | Plan | Status |
+| Feature | What was built | Status |
 |---|---|---|
-| Data Explorer | Browse everything stored on the device: every table, every signed item by kind and scope, sizes, raw signed envelopes with on-device signature verification, custody grants, files, delivery queue. Export everything (or a filter) as JSON. | ✅ |
-| Hosting files | Collections/folders, descriptions and tags, pin/unhost, per-file request counts, search across everyone you know, "seeding" view. | ✅ |
-| Transfer controls | Auto-accept from contacts, max auto-accept size, concurrent transfer limit, retry failed, clear finished, per-transfer route/RTT/speed details. | ✅ |
-| Accounts | Multiple identities on one device with a switcher, restore from phrase, per-account storage. | ✅ |
-| Biometrics | Biometric unlock; PIN with salted slow hash and attempt throttling. | ✅ |
+| Data Explorer | Every signed item (yours, kept, and live in memory) by kind and scope, search, on-device signature verification, what points at what, raw tables with secrets hidden, delete local copies, and JSON export that keeps signatures (secrets redacted unless asked). | ✅ |
+| Hosting files | Description, folder and tags; filter by folder; sort by newest, name, size or downloads; search #tags; real download counts; details with seeders and hash. | ✅ |
+| Transfer controls | Download queue with a parallel limit, auto-accept from people you follow up to a size, retry, clear finished, combined speed and time left. | ✅ |
+| Pause and resume | Needs iroh-blobs ranges (see section 1). | 📐 |
+| Accounts | Several identities on one device, each with its own keys, database and files; switch, add (with a way back), erase. | ✅ |
+| App lock | PIN stored as salted PBKDF2 (old PINs upgraded on unlock), backoff that survives restarts, biometric errors shown. | ✅ |
 
-## 4. Big new features (need design sign-off)
+## 4. Big features that need a decision first
 
 ### Voice and video calls 📐
 - Signalling over the existing direct channel (`call` control messages: offer, accept, decline, end, mute state).
-- Media over a dedicated `mentos-call/0` ALPN: one QUIC connection, unreliable datagrams for audio/video frames, a stream for control. iroh already gives E2E encryption and NAT traversal; relay fallback works but adds latency.
-- Audio: Opus 48 kHz mono 20 ms frames (needs an Opus codec in Rust, e.g. `audiopus`), capture/playback through a small platform plugin.
-- Video: H.264/VP8 from the platform encoder (Android MediaCodec) to keep CPU low.
-- Group calls: mesh up to ~4 peers; above that an SFU role picked among participants (the best-connected peer forwards).
-- Risk: needs real-device testing on two phones; the codec and audio plugin are the bulk of the work.
+- Media over a dedicated `mentos-call/0` ALPN: unreliable QUIC datagrams for frames, a stream for control. iroh already gives encryption and NAT traversal; a relay path works but adds latency.
+- Audio: Opus 48 kHz mono, 20 ms frames, through a small platform audio plugin.
+- Video: the platform's hardware encoder (Android MediaCodec, H.264) to keep battery use sane.
+- Group calls: full mesh up to about four people; above that the best-connected participant forwards (a peer-hosted SFU).
+- Risk: needs two real phones to test; the audio plugin and codec are most of the work.
 
 ### Streaming 📐
-Live broadcast to a channel: the streamer publishes segments as blobs and announces them on the channel's gossip topic; viewers fetch from the streamer and from other viewers (each viewer re-serves recent segments, so load spreads like a swarm). Shares the codec work with calls.
+A live stream is a channel whose posts are short media segments. The streamer announces each segment on the channel's gossip topic; viewers fetch it from the streamer or from other viewers, who re-serve recent segments. Shares the codec work with calls.
 
-### Digital payments (peer-maintained currency) 📐 — needs a decision
-A currency without a server must prevent double spending. Options:
-1. **Mutual credit** (recommended first): balances are bilateral IOUs signed by both sides; no global ledger, no double-spend problem, works offline. Good for tipping and paying friends.
-2. **Account chains with witness quorum** (Nano-style block lattice): each account has its own signed chain; a send is final when a quorum of online witness nodes co-sign it. Needs a Sybil-resistant witness set, which is the hard part.
-3. **Integrate an existing network** (e.g. Lightning or a stablecoin) instead of a new currency.
-Mentos should not ship anything that looks like money until the threat model is written and reviewed.
+### Payments (a peer-maintained currency) 📐 — needs a decision
+Without a server, a currency must stop double spending. Options:
+1. **Mutual credit** (suggested first): balances are IOUs signed by both people. No global ledger, no double spending, works offline. Good for tips and paying friends.
+2. **Account chains with a witness quorum** (Nano-style): each account signs its own chain; a payment is final when enough online witnesses co-sign. The hard part is choosing witnesses that cannot be faked by one person running many nodes.
+3. **Use an existing network** (Lightning or a stablecoin) instead of a new currency.
 
-## 5. Reliability work still open (from `review/PROJECT_REVIEW_2026-10-10.md`)
-Invite key disclosure before acceptance, key rotation on leave, plaintext key files at rest, bounded gossip queues. These come before a public release.
+Nothing that looks like money should ship before its threat model is written and reviewed.
 
-## 6. Release
-APK build needs: Rust Android targets + NDK (`native/build-android.ps1`), then `flutter build apk --release`.
+## 5. Reliability work still open
+From `review/PROJECT_REVIEW_2026-10-10.md`: group keys sent before an invite is accepted, no key rotation when someone leaves, key files stored in plain files, unbounded gossip queues. These should be fixed before a public release.
+
+## 6. Building
+See the README. The APK needs the Rust library built for Android first (`native/build-android.ps1`, or `cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release` from `native/`).
