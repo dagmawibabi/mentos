@@ -18,6 +18,7 @@ use std::{
 
 #[cfg(target_os = "android")]
 mod android;
+mod call;
 mod diag;
 
 use anyhow::{anyhow, Context, Result};
@@ -651,7 +652,7 @@ async fn start_node(secret: [u8; 32], blob_dir: PathBuf) -> Result<Arc<Node>> {
 
     let endpoint = diag::builder()?
         .secret_key(sk)
-        .alpns(vec![DIRECT_ALPN.to_vec(), BLOB_ALPN.to_vec(), iroh_gossip::ALPN.to_vec()])
+        .alpns(vec![DIRECT_ALPN.to_vec(), BLOB_ALPN.to_vec(), iroh_gossip::ALPN.to_vec(), call::CALL_ALPN.to_vec()])
         .bind()
         .await
         .context("bind endpoint")?;
@@ -672,6 +673,7 @@ async fn start_node(secret: [u8; 32], blob_dir: PathBuf) -> Result<Arc<Node>> {
         .accept(DIRECT_ALPN, direct)
         .accept(BLOB_ALPN, blobs)
         .accept(iroh_gossip::ALPN, gossip.clone())
+        .accept(call::CALL_ALPN, call::CallProto)
         .spawn();
 
     let node = Arc::new(Node {
@@ -1359,4 +1361,44 @@ pub extern "C" fn mentos_ping(peer: *const c_char) -> i64 {
 #[no_mangle]
 pub extern "C" fn mentos_network_change() -> i32 {
     guard(-1, diag::network_change_inner)
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_listen(call_id: *const c_char, peers: *const c_char) -> i32 {
+    guard(-1, || call::listen_inner(call_id, peers))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_dial(call_id: *const c_char, peer: *const c_char) -> i32 {
+    guard(-1, || call::dial_inner(call_id, peer))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_send(call_id: *const c_char, data: *const u8, len: usize) -> i32 {
+    guard(-1, || call::send_inner(call_id, data, len))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_recv(call_id: *const c_char, peer_out: *mut u8, buf: *mut u8, cap: usize) -> i32 {
+    guard(-1, || call::recv_inner(call_id, peer_out, buf, cap))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_max_datagram(call_id: *const c_char) -> i32 {
+    guard(0, || call::max_datagram_inner(call_id))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_drop_peer(call_id: *const c_char, peer: *const c_char) -> i32 {
+    guard(-1, || call::drop_peer_inner(call_id, peer))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_close(call_id: *const c_char) -> i32 {
+    guard(-1, || call::close_inner(call_id))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_call_stats(call_id: *const c_char) -> *mut c_char {
+    guard(std::ptr::null_mut(), || call::stats_inner(call_id))
 }
