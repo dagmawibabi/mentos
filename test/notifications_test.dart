@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mentos/data/models.dart';
 import 'package:mentos/features/settings/notifications_screen.dart';
 import 'package:mentos/net/engine.dart';
+import 'package:mentos/state/background.dart';
 import 'package:mentos/state/notifications.dart';
 import 'package:mentos/state/settings.dart';
 
@@ -55,6 +56,15 @@ void main() {
       expect(lunch.quietAt(noon), isTrue);
       final s = const Settings().copyWith(notify: lunch);
       expect(NotifyGate().decide(note('dm'), s, now: noon, foreground: false, muted: false), isNull);
+    });
+
+    test('background notification text and setting', () {
+      expect(keepAliveText(running: false, peers: 3), 'Reconnecting to the mesh…');
+      expect(keepAliveText(running: true, peers: 0), 'Online · waiting for contacts');
+      expect(keepAliveText(running: true, peers: 1), 'Online · 1 peer connected');
+      expect(keepAliveText(running: true, peers: 4), 'Online · 4 peers connected');
+      expect(const Settings().keepAlive, isFalse, reason: 'opt-in, it costs battery');
+      expect(Settings.decode(const Settings().copyWith(keepAlive: true).encode()).keepAlive, isTrue);
     });
 
     test('preferences survive encode/decode', () {

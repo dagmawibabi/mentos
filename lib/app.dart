@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/tokens.dart';
+import 'state/background.dart';
 import 'state/notifications.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
@@ -19,6 +20,7 @@ class MentosApp extends ConsumerWidget {
     final session = ref.watch(sessionProvider);
     final router = ref.watch(routerProvider);
     ref.watch(notificationServiceProvider);
+    ref.watch(keepAliveProvider);
     final light = buildTheme(Palette.light);
     final dark = buildTheme(Palette.dark);
     // Keep the navigator out of the tree until the node is open so Feed/You

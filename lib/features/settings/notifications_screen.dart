@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../state/background.dart';
 import '../../state/notifications.dart';
 import '../../state/providers.dart';
 import '../../state/settings.dart';
@@ -64,6 +65,29 @@ class NotificationsScreen extends ConsumerWidget {
               }
             },
           ),
+          if (NodeKeepAlive.supported) ...[
+            SwitchTile(
+              icon: Icons.podcasts_rounded,
+              title: 'Stay reachable in the background',
+              subtitle: 'Keeps your node online with a small permanent notification, so messages arrive '
+                  'when Mentos is closed. Uses more battery.',
+              value: s.keepAlive,
+              onChanged: (v) async {
+                notifier.update((x) => x.copyWith(keepAlive: v));
+                if (v && !await NodeKeepAlive.batteryExempt()) {
+                  if (!context.mounted) return;
+                  final ok = await confirm(
+                    context,
+                    title: 'Allow running in the background?',
+                    body: 'Android may still cut the connection during deep sleep unless Mentos is excluded '
+                        'from battery optimisation.',
+                    action: 'Open settings',
+                  );
+                  if (ok) await NodeKeepAlive.askBatteryExempt();
+                }
+              },
+            ),
+          ],
           SwitchTile(
             icon: Icons.visibility_outlined,
             title: 'Show names and text',
@@ -96,9 +120,9 @@ class NotificationsScreen extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, 0),
             child: Text(
-              'Mentos has no push server, so notifications only arrive while the app is alive in the background '
-              'and the sender is reachable. If your phone closes the app, messages wait on the sender\'s device '
-              'and arrive when you both are online.',
+              'Mentos has no push server, so notifications arrive while your node is running and the sender is '
+              'reachable. Turn on "Stay reachable in the background" to keep it running when the app is closed; '
+              'otherwise messages wait on the sender\'s device until you are both online.',
               style: Txt.small(p.muted),
             ),
           ),

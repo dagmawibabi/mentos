@@ -29,6 +29,7 @@ class Settings {
     this.xferAutoAccept = false,
     this.xferAutoMaxMb = 50,
     this.xferParallel = 3,
+    this.keepAlive = false,
   });
 
   /// Orbot's HTTP CONNECT proxy.
@@ -92,6 +93,10 @@ class Settings {
   /// Incoming transfers that may run at once; the rest wait in a queue.
   final int xferParallel;
 
+  /// Android: keep the node running in the background with a persistent
+  /// notification, so messages arrive without opening the app.
+  final bool keepAlive;
+
   /// The options string handed to the native node before it binds.
   Map<String, Object?> get netOptions => {
         'privacy': privacy,
@@ -124,6 +129,7 @@ class Settings {
     bool? xferAutoAccept,
     int? xferAutoMaxMb,
     int? xferParallel,
+    bool? keepAlive,
   }) =>
       Settings(
         themeMode: themeMode ?? this.themeMode,
@@ -151,6 +157,7 @@ class Settings {
         xferAutoAccept: xferAutoAccept ?? this.xferAutoAccept,
         xferAutoMaxMb: xferAutoMaxMb ?? this.xferAutoMaxMb,
         xferParallel: xferParallel ?? this.xferParallel,
+        keepAlive: keepAlive ?? this.keepAlive,
       );
 
   String encode() => jsonEncode({
@@ -179,6 +186,7 @@ class Settings {
         'xa': xferAutoAccept,
         'xmax': xferAutoMaxMb,
         'xpar': xferParallel,
+        'bg': keepAlive,
       });
 
   static Settings decode(String? s) {
@@ -211,6 +219,7 @@ class Settings {
         xferAutoAccept: j['xa'] == true,
         xferAutoMaxMb: ((j['xmax'] as num?)?.toInt() ?? 50).clamp(1, 4096),
         xferParallel: ((j['xpar'] as num?)?.toInt() ?? 3).clamp(1, 8),
+        keepAlive: j['bg'] == true,
       );
     } catch (_) {
       return const Settings();
