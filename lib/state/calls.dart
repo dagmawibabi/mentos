@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/calls/devices.dart';
 import '../net/call/calls.dart';
+import '../net/call/live.dart';
 import '../net/transport.dart';
 import 'session.dart';
 
@@ -24,6 +25,28 @@ final callManagerProvider = Provider<CallManager?>((ref) {
 
 final callStateProvider = StreamProvider<CallState?>((ref) {
   final m = ref.watch(callManagerProvider);
+  if (m == null) return Stream.value(null);
+  return Stream.multi((out) {
+    out.add(m.current);
+    final sub = m.changes.listen(out.add);
+    out.onCancel = sub.cancel;
+  });
+});
+
+/// Live streams for the open account.
+final liveManagerProvider = Provider<LiveManager?>((ref) {
+  final s = ref.watch(sessionProvider);
+  if (s is! SessionReady) return null;
+  final Object net = s.engine.net;
+  if (net is! MediaLink) return null;
+  final phone = !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+  final m = LiveManager(s.engine, net, devices: phone ? PhoneDevices() : null);
+  ref.onDispose(() => unawaited(m.dispose()));
+  return m;
+});
+
+final liveStateProvider = StreamProvider<LiveState?>((ref) {
+  final m = ref.watch(liveManagerProvider);
   if (m == null) return Stream.value(null);
   return Stream.multi((out) {
     out.add(m.current);

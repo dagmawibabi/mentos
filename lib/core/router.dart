@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../features/activity/activity_screen.dart';
 import '../features/bookmarks/bookmarks_screen.dart';
 import '../features/calls/call_screen.dart';
+import '../features/calls/live_screen.dart';
 import '../features/chats/chat_screen.dart';
 import '../features/data/data_explorer_screen.dart';
 import '../features/chats/chats_screen.dart';
@@ -134,6 +135,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/call',
         parentNavigatorKey: _rootKey,
         pageBuilder: (_, _) => const MaterialPage(fullscreenDialog: true, child: CallScreen()),
+      ),
+      GoRoute(
+        path: '/live',
+        parentNavigatorKey: _rootKey,
+        pageBuilder: (_, _) => const MaterialPage(fullscreenDialog: true, child: LiveScreen()),
       ),
       GoRoute(path: '/calls', builder: (_, _) => const CallLogScreen()),
       GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),

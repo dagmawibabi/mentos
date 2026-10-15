@@ -90,11 +90,10 @@ class PhoneDevices implements CallDevices {
   Stream<Uint8List> get camera => _cam.stream;
 
   @override
-  Future<void> start({required bool video, required Uint8List Function() pull}) async {
+  Future<void> start({required bool video, required Uint8List Function() pull, bool capture = true}) async {
     _pull = pull;
-    final perms = [Permission.microphone, if (video) Permission.camera];
-    await perms.request();
-    if (await Permission.microphone.isGranted) {
+    if (capture) await [Permission.microphone, if (video) Permission.camera].request();
+    if (capture && await Permission.microphone.isGranted) {
       final stream = await _rec.startStream(const RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: MediaPacket.sampleRate,
@@ -116,7 +115,7 @@ class PhoneDevices implements CallDevices {
     await FlutterPcmSound.setFeedThreshold(MediaPacket.samplesPerFrame * 3);
     FlutterPcmSound.setFeedCallback(_feed);
     FlutterPcmSound.start();
-    if (video) await setVideo(true);
+    if (capture && video) await setVideo(true);
   }
 
   void _feed(int remaining) {

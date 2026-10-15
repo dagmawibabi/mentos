@@ -22,7 +22,8 @@ abstract class CallDevices {
   Stream<Uint8List> get camera;
 
   /// Starts audio (and video) I/O. [pull] supplies the next 20 ms to play.
-  Future<void> start({required bool video, required Uint8List Function() pull});
+  /// With [capture] false only playback runs (watching a live stream).
+  Future<void> start({required bool video, required Uint8List Function() pull, bool capture = true});
   Future<void> setVideo(bool on);
   Future<void> switchCamera();
 

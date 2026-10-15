@@ -13,6 +13,7 @@ import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
+import '../calls/live_screen.dart';
 
 /// A channel: one voice at the top, everyone else reads and comments.
 class BroadcastScreen extends ConsumerStatefulWidget {
@@ -91,6 +92,8 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           ),
         ),
         actions: [
+          if (bcast != null && bcast.owner == e.me.id)
+            IconBtn(Icons.sensors_rounded, tooltip: 'Go live', onTap: () => goLive(context, ref, bcast)),
           IconBtn(Icons.more_horiz_rounded, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
           const SizedBox(width: 4),
         ],
@@ -404,6 +407,15 @@ class _ChannelPostState extends ConsumerState<_ChannelPost> {
                 if (post.text.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(post.text, style: Txt.body(p.ink)),
+                ],
+                if (post.item.body['live'] is Map && !post.edited && post.author != e.me.id) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: p.danger, minimumSize: const Size(0, 36)),
+                    onPressed: () => joinLive(context, ref, post.item),
+                    icon: const Icon(Icons.sensors_rounded, size: 18),
+                    label: const Text('Join live'),
+                  ),
                 ],
                 const SizedBox(height: 8),
                 Row(

@@ -247,6 +247,13 @@ class Envelope {
         if (StorySticker.fromJson(st) == null) return false;
       }
     }
+    final live = body['live'];
+    if (live != null) {
+      if (kind != K.post || Scope.type(scope) != 'bcast' || live is! Map) return false;
+      final id = live['id'];
+      if (id is! String || !RegExp(r'^[A-Za-z0-9_-]{8,40}$').hasMatch(id)) return false;
+      if (live['video'] != null && live['video'] is! bool) return false;
+    }
     if (kind == K.host) {
       final note = body['note'];
       if (note != null && (note is! String || note.length > 1000)) return false;

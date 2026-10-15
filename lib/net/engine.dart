@@ -2289,6 +2289,7 @@ class Engine {
     String? channelId,
     String? bcastId,
     bool silent = false,
+    Map<String, Object?>? live,
   }) {
     final scope = bcastId != null
         ? Scope.bcast(me.id, bcastId)
@@ -2313,6 +2314,7 @@ class Engine {
       if (ai) 'ai': true,
       if (nsfw) 'nsfw': true,
       if (silent) 'silent': true,
+      'live': ?live,
     }, keep: k);
   }
 

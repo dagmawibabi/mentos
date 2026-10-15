@@ -24,7 +24,7 @@ class FakeDevices implements CallDevices {
   @override
   Stream<Uint8List> get camera => camCtl.stream;
   @override
-  Future<void> start({required bool video, required Uint8List Function() pull}) async {
+  Future<void> start({required bool video, required Uint8List Function() pull, bool capture = true}) async {
     started = true;
     this.video = video;
     puller = pull;
