@@ -33,6 +33,14 @@ typedef _PingC = Int64 Function(Pointer<Utf8>);
 typedef _PingD = int Function(Pointer<Utf8>);
 typedef _IntC = Int32 Function();
 typedef _IntD = int Function();
+typedef _Str2C = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _Str2D = int Function(Pointer<Utf8>, Pointer<Utf8>);
+typedef _CallSendC = Int32 Function(Pointer<Utf8>, Pointer<Uint8>, IntPtr);
+typedef _CallSendD = int Function(Pointer<Utf8>, Pointer<Uint8>, int);
+typedef _CallRecvC = Int32 Function(Pointer<Utf8>, Pointer<Uint8>, Pointer<Uint8>, IntPtr);
+typedef _CallRecvD = int Function(Pointer<Utf8>, Pointer<Uint8>, Pointer<Uint8>, int);
+typedef _StrArgC = Pointer<Utf8> Function(Pointer<Utf8>);
+typedef _StrArgD = Pointer<Utf8> Function(Pointer<Utf8>);
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
 
@@ -59,7 +67,15 @@ class IrohNative {
         _setOptions = _optional(() => lib.lookupFunction<_ConnectC, _ConnectD>('mentos_set_options')),
         _diagnostics = _optional(() => lib.lookupFunction<_StrC, _StrD>('mentos_diagnostics')),
         _ping = _optional(() => lib.lookupFunction<_PingC, _PingD>('mentos_ping')),
-        _networkChange = _optional(() => lib.lookupFunction<_IntC, _IntD>('mentos_network_change'));
+        _networkChange = _optional(() => lib.lookupFunction<_IntC, _IntD>('mentos_network_change')),
+        _callListen = _optional(() => lib.lookupFunction<_Str2C, _Str2D>('mentos_call_listen')),
+        _callDial = _optional(() => lib.lookupFunction<_Str2C, _Str2D>('mentos_call_dial')),
+        _callSend = _optional(() => lib.lookupFunction<_CallSendC, _CallSendD>('mentos_call_send')),
+        _callRecv = _optional(() => lib.lookupFunction<_CallRecvC, _CallRecvD>('mentos_call_recv')),
+        _callMax = _optional(() => lib.lookupFunction<_ConnectC, _ConnectD>('mentos_call_max_datagram')),
+        _callDrop = _optional(() => lib.lookupFunction<_Str2C, _Str2D>('mentos_call_drop_peer')),
+        _callClose = _optional(() => lib.lookupFunction<_ConnectC, _ConnectD>('mentos_call_close')),
+        _callStats = _optional(() => lib.lookupFunction<_StrArgC, _StrArgD>('mentos_call_stats'));
 
   final _StartD _start;
   final _StopD _stop;
@@ -129,6 +145,93 @@ class IrohNative {
   }
 
   void networkChange() => _networkChange?.call();
+
+  final _Str2D? _callListen;
+  final _Str2D? _callDial;
+  final _CallSendD? _callSend;
+  final _CallRecvD? _callRecv;
+  final _ConnectD? _callMax;
+  final _Str2D? _callDrop;
+  final _ConnectD? _callClose;
+  final _StrArgD? _callStats;
+
+  bool get hasCalls => _callListen != null && _callRecv != null;
+
+  int _two(_Str2D? f, String a, String b) {
+    if (f == null) return -1;
+    final pa = a.toNativeUtf8();
+    final pb = b.toNativeUtf8();
+    try {
+      return f(pa, pb);
+    } finally {
+      malloc.free(pa);
+      malloc.free(pb);
+    }
+  }
+
+  int _one(_ConnectD? f, String a) {
+    if (f == null) return -1;
+    final pa = a.toNativeUtf8();
+    try {
+      return f(pa);
+    } finally {
+      malloc.free(pa);
+    }
+  }
+
+  bool callListen(String call, List<String> peers) => _two(_callListen, call, peers.join(',')) == 0;
+  bool callDial(String call, String peer) => _two(_callDial, call, peer) == 0;
+  int callMaxDatagram(String call) => _one(_callMax, call).clamp(0, 1 << 20);
+  void callDropPeer(String call, String peer) => _two(_callDrop, call, peer);
+  void callClose(String call) => _one(_callClose, call);
+
+  int callSend(String call, Uint8List data) {
+    final f = _callSend;
+    if (f == null) return -1;
+    final c = call.toNativeUtf8();
+    final b = data.allocate();
+    try {
+      return f(c, b.cast(), data.length);
+    } finally {
+      malloc.free(c);
+      malloc.free(b);
+    }
+  }
+
+  // Reused across polls; a call drains up to ~100 packets a second.
+  Pointer<Uint8>? _peerBuf;
+  Pointer<Uint8>? _recvBuf;
+  static const _recvCap = 2048;
+
+  ({String peer, Uint8List data})? callRecv(String call) {
+    final f = _callRecv;
+    if (f == null) return null;
+    final peer = _peerBuf ??= malloc<Uint8>(32);
+    final buf = _recvBuf ??= malloc<Uint8>(_recvCap);
+    final c = call.toNativeUtf8();
+    try {
+      final n = f(c, peer, buf, _recvCap);
+      if (n <= 0) return null;
+      final id = peer.asTypedList(32).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      return (peer: id, data: Uint8List.fromList(buf.asTypedList(n)));
+    } finally {
+      malloc.free(c);
+    }
+  }
+
+  Map<String, dynamic>? callStats(String call) {
+    final f = _callStats;
+    if (f == null) return null;
+    final c = call.toNativeUtf8();
+    try {
+      final raw = _take(f(c));
+      if (raw == null) return null;
+      final m = jsonDecode(raw);
+      return m is Map ? m.cast<String, dynamic>() : null;
+    } finally {
+      malloc.free(c);
+    }
+  }
 
   static _CancelD? _lookupCancel(DynamicLibrary lib) {
     try {

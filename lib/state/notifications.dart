@@ -58,6 +58,7 @@ class NotifyGate {
 }
 
 const _channels = {
+  'call': ('Calls', Importance.max),
   'dm': ('Direct messages', Importance.high),
   'group': ('Group messages', Importance.high),
   'mention': ('Mentions', Importance.high),

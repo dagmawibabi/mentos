@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/tokens.dart';
+import 'features/calls/call_screen.dart';
 import 'state/background.dart';
 import 'state/notifications.dart';
 import 'state/providers.dart';
@@ -56,7 +57,12 @@ class MentosApp extends ConsumerWidget {
         final reduce = ref.watch(settingsProvider).reduceMotion;
         final media = MediaQuery.of(context);
         final body = session is SessionReady
-            ? LockGate(child: AlertHost(router: router, child: child ?? const SizedBox.shrink()))
+            ? LockGate(
+                child: CallHost(
+                  router: router,
+                  child: AlertHost(router: router, child: child ?? const SizedBox.shrink()),
+                ),
+              )
             : (child ?? const SizedBox.shrink());
         return MediaQuery(
           data: media.copyWith(disableAnimations: media.disableAnimations || reduce),

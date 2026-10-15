@@ -44,6 +44,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         title: Text(_archived ? 'Archived' : 'Chats'),
         leading: _archived ? IconBtn(Icons.arrow_back_rounded, onTap: () => setState(() => _archived = false)) : null,
         actions: [
+          IconBtn(Icons.call_outlined, tooltip: 'Calls', onTap: () => context.push('/calls')),
           IconBtn(Icons.swap_horiz_rounded, tooltip: 'File transfer', onTap: () => context.push('/transfer')),
           IconBtn(Icons.edit_square, tooltip: 'New chat', onTap: () => _newChat(context)),
           const SizedBox(width: 8),

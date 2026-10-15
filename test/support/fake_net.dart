@@ -29,7 +29,7 @@ class TestNetwork {
   Completer<bool>? sendGate;
 }
 
-class TestTransport implements Transport {
+class TestTransport implements Transport, MediaLink {
   TestTransport(this.network, this.id) {
     network.nodes[id] = this;
   }
@@ -72,6 +72,83 @@ class TestTransport implements Transport {
     }
     return true;
   }
+
+  // In-process call media: call id -> allowed peers, connected peers, inbox.
+  final _calls = <String, ({Set<String> allowed, Set<String> conns, List<({String peer, Uint8List data})> inbox})>{};
+  int mediaSent = 0;
+
+  @override
+  bool callListen(String call, List<String> peers) {
+    final c = _calls.putIfAbsent(call, () => (allowed: <String>{}, conns: <String>{}, inbox: []));
+    c.allowed.addAll(peers);
+    return true;
+  }
+
+  @override
+  bool callDial(String call, String peer) {
+    final mine = _calls[call];
+    final other = network.nodes[peer];
+    final theirs = other?._calls[call];
+    if (mine == null || !mine.allowed.contains(peer)) return false;
+    scheduleMicrotask(() {
+      final ok = online && other != null && other.online && theirs != null && theirs.allowed.contains(id);
+      if (!ok) {
+        controller.add(MediaEvent(call, peer, false));
+        return;
+      }
+      mine.conns.add(peer);
+      theirs.conns.add(id);
+      controller.add(MediaEvent(call, peer, true));
+      other.controller.add(MediaEvent(call, id, true));
+    });
+    return true;
+  }
+
+  @override
+  int callSend(String call, Uint8List data) {
+    final c = _calls[call];
+    if (c == null) return -1;
+    var n = 0;
+    for (final p in c.conns) {
+      final t = network.nodes[p]?._calls[call];
+      if (t == null || !t.conns.contains(id) || !online) continue;
+      t.inbox.add((peer: id, data: Uint8List.fromList(data)));
+      n++;
+    }
+    mediaSent += n;
+    return n;
+  }
+
+  @override
+  ({String peer, Uint8List data})? callRecv(String call) {
+    final c = _calls[call];
+    if (c == null || c.inbox.isEmpty) return null;
+    return c.inbox.removeAt(0);
+  }
+
+  @override
+  int callMaxDatagram(String call) => (_calls[call]?.conns.isNotEmpty ?? false) ? 1200 : 0;
+
+  @override
+  void callDropPeer(String call, String peer) {
+    _calls[call]?.allowed.remove(peer);
+    _calls[call]?.conns.remove(peer);
+  }
+
+  @override
+  void callClose(String call) {
+    final c = _calls.remove(call);
+    for (final p in c?.conns ?? const <String>{}) {
+      final t = network.nodes[p];
+      if (t?._calls[call]?.conns.remove(id) ?? false) t!.controller.add(MediaEvent(call, id, false));
+    }
+  }
+
+  @override
+  Map<String, dynamic>? callStats(String call) => {
+        'id': call,
+        'peers': [for (final p in _calls[call]?.conns ?? const <String>{}) {'peer': p, 'rttMs': 12.0}],
+      };
 
   @override
   Future<NetStatus> status() async =>

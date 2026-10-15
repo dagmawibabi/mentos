@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../calls/call_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -74,6 +76,8 @@ class ChatScreen extends ConsumerWidget {
           ),
         ),
         actions: [
+          IconBtn(Icons.call_outlined, tooltip: 'Voice call', onTap: () => startCall(context, ref, [peer], video: false)),
+          IconBtn(Icons.videocam_outlined, tooltip: 'Video call', onTap: () => startCall(context, ref, [peer], video: true)),
           _SyncButton(state: sync, onTap: () => showSyncSheet(context, scope, peer)),
           IconBtn(Icons.swap_horiz_rounded, tooltip: 'Send a file', onTap: () => context.push('/transfer/$peer')),
           IconBtn(Icons.info_outline_rounded, tooltip: 'Technical',

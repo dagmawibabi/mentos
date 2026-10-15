@@ -94,6 +94,28 @@ class Engine {
   /// Everything that may deserve an operating-system notification. The
   /// listener decides, using the person's notification settings.
   Stream<OsNote> get notes => _notes.stream;
+
+  final _callSignals = StreamController<({String from, Map<String, dynamic> m})>.broadcast();
+  final _media = StreamController<MediaEvent>.broadcast();
+
+  /// Call signalling received over the authenticated direct channel.
+  Stream<({String from, Map<String, dynamic> m})> get callSignals => _callSignals.stream;
+
+  /// Media connections opening and closing.
+  Stream<MediaEvent> get mediaEvents => _media.stream;
+
+  /// Sends a call control message now; calls are real time, so nothing is
+  /// queued for later.
+  Future<bool> sendCallSignal(String peer, Map<String, dynamic> body) => _send(peer, {...body, 't': 'call'});
+
+  /// Records something for the person's activity feed and notifications.
+  void noteActivity(Activity a, {String? title, String? body, String? route, String category = 'other'}) {
+    db.addActivity(a);
+    _emit({Ch.activity});
+    if (title != null) {
+      _notify(id: a.id, title: title, body: body ?? '', route: route, category: category, at: a.ts);
+    }
+  }
   final _pending = <String>{};
   Timer? _flush;
   final _subs = <StreamSubscription>[];
@@ -555,6 +577,8 @@ class Engine {
         if (msg != null) await _onDirect(from, msg);
       case GossipEvent(:final topic, :final from, :final data):
         await _onGossip(topic, from, data);
+      case MediaEvent():
+        _media.add(ev);
       case NeighborEvent(:final topic, :final peer, :final up):
         final set = _neighbors.putIfAbsent(topic, () => <String>{});
         up ? set.add(peer) : set.remove(peer);
@@ -930,6 +954,8 @@ class Engine {
         if (e != null) await ingest(e, via: from);
       case 'ginvite':
         await _onGroupInvite(from, m);
+      case 'call':
+        if (!(db.peer(from)?.blocked ?? false)) _callSignals.add((from: from, m: m));
       case 'gkey':
         final gid = m['id'] as String? ?? '';
         final key = m['key'] as String? ?? '';
@@ -2279,8 +2305,8 @@ class Engine {
     return _publish(K.post, scope, {
       'text': text,
       if (title.isNotEmpty) 'title': title,
-      if (boardId != null) 'board': boardId,
-      if (channelId != null) 'channel': channelId,
+      'board': ?boardId,
+      'channel': ?channelId,
       if (media.isNotEmpty) 'media': media.map((m) => m.toJson()).toList(),
       'poll': ?poll?.toJson(),
       'repost': ?repost,
