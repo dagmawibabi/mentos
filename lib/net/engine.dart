@@ -3165,6 +3165,10 @@ class Engine {
     return (owned: c['owned']!, kept: c['kept']!, live: _mem.length);
   }
 
+  /// Items held only in memory: visible while their author is reachable,
+  /// never written to disk.
+  List<Item> liveItems() => [for (final m in _mem.values) m.item];
+
   int liveItemsFrom(String peer) =>
       _mem.values.where((m) => m.item.author == peer).length;
   Map<String, int> keptByAuthor() => db.keptByAuthor();

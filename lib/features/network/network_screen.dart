@@ -56,6 +56,7 @@ class NetworkScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          IconBtn(Icons.data_object_rounded, tooltip: 'Data explorer', onTap: () => context.push('/data')),
           IconBtn(Icons.monitor_heart_outlined, tooltip: 'Diagnostics', onTap: () => context.push('/diagnostics')),
           IconBtn(Icons.shield_outlined, tooltip: 'Privacy', onTap: () => context.push('/privacy')),
           IconBtn(Icons.hub_outlined, tooltip: 'Iroh network', onTap: () {

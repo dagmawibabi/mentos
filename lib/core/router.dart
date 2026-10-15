@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../features/activity/activity_screen.dart';
 import '../features/bookmarks/bookmarks_screen.dart';
 import '../features/chats/chat_screen.dart';
+import '../features/data/data_explorer_screen.dart';
 import '../features/chats/chats_screen.dart';
 import '../features/connect/connect_screen.dart';
 import '../features/feed/compose_screen.dart';
@@ -125,6 +126,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/s/:id/settings', builder: (_, s) => SpaceSettingsScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/connect', builder: (_, s) => ConnectScreen(scan: s.uri.queryParameters['scan'] == '1')),
+      GoRoute(path: '/data', builder: (_, _) => const DataExplorerScreen()),
       GoRoute(path: '/diagnostics', builder: (_, _) => const DiagnosticsScreen()),
       GoRoute(path: '/privacy', builder: (_, _) => const PrivacyScreen()),
       GoRoute(path: '/node/:id', builder: (_, s) => NodeScreen(id: s.pathParameters['id']!)),

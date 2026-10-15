@@ -161,6 +161,12 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => _quota(context, ref),
           ),
           RowTile(icon: Icons.folder_outlined, title: 'Files on this phone', onTap: () => context.push('/files')),
+          RowTile(
+            icon: Icons.data_object_rounded,
+            title: 'Data explorer',
+            subtitle: 'Browse, verify and export everything stored here',
+            onTap: () => context.push('/data'),
+          ),
           RowTile(icon: Icons.hub_outlined, title: 'Network and custody', onTap: () => context.go('/network')),
           RowTile(
             icon: Icons.shield_outlined,
