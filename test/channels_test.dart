@@ -60,6 +60,14 @@ void main() {
     await a.setChannelState(c, comments: true);
     expect(a.channelState(c), (pinned: null, comments: true));
     expect(a.feed().where((p) => p.text.isEmpty), isEmpty, reason: 'channel edits do not show up as posts');
+    final pv = a.post(post.id)!;
+    expect(a.commentsOpen(pv), isTrue);
+    await a.comment(pv, 'hi');
+    expect(a.comments(pv).length, 1);
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    await a.setChannelState(c, comments: false);
+    expect(a.commentsOpen(pv), isFalse);
+    expect(a.comments(pv), isEmpty);
   });
 
   testWidgets('owner channel screen and directory render at phone width', (tester) async {

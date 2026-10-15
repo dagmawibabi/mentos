@@ -3034,7 +3034,18 @@ class Engine {
     return _postViews([i], db.bookmarkIds()).firstOrNull;
   }
 
+  /// False when the post is in a personal channel whose owner turned
+  /// comments off.
+  bool commentsOpen(PostView post) {
+    final owner = Scope.bcastOwner(post.item.e.scope);
+    final chan = post.channelId;
+    if (owner == null || chan == null) return true;
+    final c = broadcasts(owner: owner).where((b) => b.id == chan).firstOrNull;
+    return c == null || channelState(c).comments;
+  }
+
   List<CommentView> comments(PostView post) {
+    if (!commentsOpen(post)) return const [];
     final all = items(post.scope).where((i) => i.e.kind == K.comment).toList();
     final targets = {for (final c in all) c.id: c};
     final f = fold(

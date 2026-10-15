@@ -39,7 +39,7 @@ Goal: other apps can be built on the same core.
 | Story reactions | Reaction bar (❤️ 😂 😮 😢 🔥 👏). Fixed two bugs: reactions on stories were rejected by every recipient, and likes, views and reactions went to the viewer's followers instead of the story's author. | ✅ |
 | Story stickers and links | Emoji, text, link, @mention and question stickers; drag, pinch and long-press to remove. Links open after a confirmation; only http/https are accepted. | ✅ |
 | Story replies | Replies and answers to questions land in the author's DMs with a header showing what they answer. | ✅ |
-| Channels | Signed subscriptions the owner can count, subscribe/leave/mute, pinned post, comments on/off, silent posts, view counts, channel directory. Comments-off is enforced in the UI only so far. | ✅ |
+| Channels | Signed subscriptions the owner can count, subscribe/leave/mute, pinned post, comments on/off, silent posts, view counts, channel directory. With comments off, comments are hidden and the reply box disappears everywhere; a modified client could still send one, but it is not shown. | ✅ |
 | Notifications | OS notifications per category (DMs, groups, mentions, replies, likes, followers, stories, channels, invitations, transfers), previews on/off, quiet hours, muted chats (mentions still get through). | ✅ |
 | Background delivery | Notifications only arrive while the app process is alive. A foreground service (Android) would keep the node running. | 📐 |
 | Already there | Feed, stories, likes, bookmarks, comments, replies, reposts, polls, DMs, group chats, spaces with channels and forums. | ✅ |
