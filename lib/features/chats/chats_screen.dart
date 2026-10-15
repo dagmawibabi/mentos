@@ -35,7 +35,9 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
         .where((c) => _q.isEmpty || e.nameOf(c.peer).toLowerCase().contains(_q.toLowerCase()))
         .toList();
     final archivedCount = all.where((c) => c.archived).length;
-    final channels = ref.watch(broadcastsProvider).value ?? const <Bcast>[];
+    final known = ref.watch(broadcastsProvider).value ?? const <Bcast>[];
+    final channels = known.where((c) => e.isSubscribed(c.owner, c.id)).toList();
+    final more = known.length - channels.length;
 
     return Scaffold(
       appBar: AppBar(
@@ -62,8 +64,15 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
           if (!_archived && channels.isNotEmpty)
             ...[
               for (final ch in channels.take(8)) BroadcastRow(channel: ch),
-              const Hairline(),
             ],
+          if (!_archived && known.isNotEmpty)
+            RowTile(
+              icon: Icons.campaign_outlined,
+              title: 'All channels',
+              subtitle: more > 0 ? '$more you can join' : null,
+              onTap: () => context.push('/channels'),
+            ),
+          if (!_archived && known.isNotEmpty) const Hairline(),
           if (!_archived && archivedCount > 0)
             RowTile(
               icon: Icons.archive_outlined,

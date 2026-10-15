@@ -1692,6 +1692,7 @@ class Engine {
         final text = (e.body['text'] as String?)?.trim() ?? '';
         if (e.author != me.id && owner != null) {
           final chan = Scope.parts(e.scope).elementAtOrNull(2) ?? '';
+          if (e.body['silent'] == true || !isSubscribed(owner, chan)) break;
           _notify(
             at: e.ts,
             id: 'chan:${e.id}',
@@ -1737,6 +1738,29 @@ class Engine {
             category: 'reply',
           );
           _emit({Ch.activity});
+        }
+      case K.like when e.body['sub'] == true:
+        final target = e.target;
+        final chan = target == null ? null : db.item(target);
+        if (Scope.postAuthor(e.scope) == me.id && chan != null && chan.owned && chan.e.kind == K.chan && e.body['on'] != false) {
+          db.addActivity(Activity(
+            id: 'sub:${e.author}:$target',
+            kind: 'subscribe',
+            actor: e.author,
+            ref: target,
+            scope: e.scope,
+            text: chan.body['name'] as String?,
+            ts: e.ts,
+          ));
+          _notify(
+            at: e.ts,
+            id: 'sub:${e.author}:$target',
+            title: nameOf(e.author),
+            body: 'Subscribed to ${chan.body['name'] ?? 'your channel'}',
+            route: '/ch/${me.id}/$target',
+            category: 'follow',
+          );
+          _emit({Ch.activity, Ch.channels});
         }
       case K.like:
         if (Scope.postAuthor(e.scope) == me.id && e.body['on'] != false) {
@@ -2231,6 +2255,7 @@ class Engine {
     bool nsfw = false,
     String? channelId,
     String? bcastId,
+    bool silent = false,
   }) {
     final scope = bcastId != null
         ? Scope.bcast(me.id, bcastId)
@@ -2254,6 +2279,7 @@ class Engine {
       'repost': ?repost,
       if (ai) 'ai': true,
       if (nsfw) 'nsfw': true,
+      if (silent) 'silent': true,
     }, keep: k);
   }
 
@@ -3708,6 +3734,67 @@ class Engine {
       }
     }
     return out;
+  }
+
+  // ---------------------------------------------------------------------------
+  // channels
+
+  Set<String> _chanSubs() {
+    try {
+      final raw = db.getKv('chansubs');
+      return raw == null ? <String>{} : {for (final x in jsonDecode(raw) as List) if (x is String) x};
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  /// Your own channels count as subscribed.
+  bool isSubscribed(String owner, String channelId) => owner == me.id || _chanSubs().contains('$owner/$channelId');
+
+  /// Subscribing follows the owner (their posts travel on their feed topic)
+  /// and sends them a signed subscription they can count.
+  Future<void> subscribe(Bcast c, bool on) async {
+    final subs = _chanSubs();
+    on ? subs.add('${c.owner}/${c.id}') : subs.remove('${c.owner}/${c.id}');
+    db.setKv('chansubs', jsonEncode(subs.toList()));
+    if (on && !(db.peer(c.owner)?.iFollow ?? false)) await follow(c.owner, true);
+    await _publish(K.like, Scope.post(c.owner, c.id), {'target': c.id, 'on': on, 'sub': true}, keep: true);
+    _emit({Ch.channels, Ch.chats});
+  }
+
+  /// People whose latest subscription to [c] is on. Exact for your own
+  /// channels; for others it is what has reached this device.
+  Set<String> subscribers(Bcast c) {
+    final latest = <String, Item>{};
+    for (final m in _mutationsFor([c.id])) {
+      if (m.e.kind != K.like || m.body['sub'] != true) continue;
+      final prev = latest[m.author];
+      if (prev == null || m.ts >= prev.ts) latest[m.author] = m;
+    }
+    return {for (final x in latest.entries) if (x.value.body['on'] != false) x.key};
+  }
+
+  /// Owner-controlled state: pinned post and whether comments are open.
+  ({String? pinned, bool comments}) channelState(Bcast c) {
+    Item? last;
+    for (final m in _mutationsFor([c.id])) {
+      if (m.e.kind != K.edit || m.author != c.owner || m.body['chan'] != true) continue;
+      if (last == null || m.ts >= last.ts) last = m;
+    }
+    final b = last?.body ?? const <String, dynamic>{};
+    return (pinned: b['pin'] is String ? b['pin'] as String : null, comments: b['comments'] != false);
+  }
+
+  Future<void> setChannelState(Bcast c, {String? pinned, required bool comments}) async {
+    if (c.owner != me.id) throw StateError('Only the owner changes a channel');
+    await _publish(K.edit, Scope.feed(me.id), {
+      'target': c.id,
+      'chan': true,
+      'text': '',
+      'pin': ?pinned,
+      'comments': comments,
+    }, keep: true);
+    _emit({Ch.channels, Scope.bcast(me.id, c.id)});
   }
 
   List<PostView> channelFeed({
