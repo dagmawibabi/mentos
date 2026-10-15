@@ -16,6 +16,7 @@ import '../activity/activity_screen.dart';
 import '../bookmarks/bookmarks_screen.dart';
 import '../common/attach.dart';
 import '../files/hosted_list.dart';
+import '../wallet/wallet_screen.dart';
 import '../feed/post_card.dart';
 import '../../widgets/profile_header.dart';
 
@@ -203,13 +204,18 @@ class ProfileScreen extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: Space.sm),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _sendFile(context, e, id),
-                    icon: const Icon(Icons.file_upload_outlined, size: 18),
-                    label: const Text('Send file'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _sendFile(context, e, id),
+                        icon: const Icon(Icons.file_upload_outlined, size: 18),
+                        label: const Text('Send file'),
+                      ),
+                    ),
+                    const SizedBox(width: Space.sm),
+                    Expanded(child: WalletChip(peer: id)),
+                  ],
                 ),
               ],
             ),

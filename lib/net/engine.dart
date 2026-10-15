@@ -96,6 +96,18 @@ class Engine {
   Stream<OsNote> get notes => _notes.stream;
 
   final _callSignals = StreamController<({String from, Map<String, dynamic> m})>.broadcast();
+  final _appMessages = StreamController<({String from, String app, Map<String, dynamic> m})>.broadcast();
+
+  /// Messages for features built on the engine (payments), from the
+  /// authenticated direct channel.
+  Stream<({String from, String app, Map<String, dynamic> m})> get appMessages => _appMessages.stream;
+
+  /// Sends [body] to [peer] for [app]. With [queueId] it is stored and
+  /// retried until delivered, like any other control message.
+  Future<bool> sendApp(String peer, String app, Map<String, dynamic> body, {String? queueId}) {
+    final msg = {'t': 'app', 'app': app, 'b': body};
+    return queueId == null ? _send(peer, msg) : _sendOrQueue(queueId, peer, msg);
+  }
   final _media = StreamController<MediaEvent>.broadcast();
 
   /// Call signalling received over the authenticated direct channel.
@@ -956,6 +968,12 @@ class Engine {
         await _onGroupInvite(from, m);
       case 'call':
         if (!(db.peer(from)?.blocked ?? false)) _callSignals.add((from: from, m: m));
+      case 'app':
+        final app = m['app'];
+        final body = m['b'];
+        if (app is String && body is Map && !(db.peer(from)?.blocked ?? false)) {
+          _appMessages.add((from: from, app: app, m: body.cast<String, dynamic>()));
+        }
       case 'gkey':
         final gid = m['id'] as String? ?? '';
         final key = m['key'] as String? ?? '';

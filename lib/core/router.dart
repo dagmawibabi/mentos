@@ -35,6 +35,7 @@ import '../features/settings/settings_screen.dart';
 import '../features/shell/home_shell.dart';
 import '../features/spaces/broadcast_screen.dart';
 import '../features/spaces/channels_screen.dart';
+import '../features/wallet/wallet_screen.dart';
 import '../features/spaces/create_space_screen.dart';
 import '../features/spaces/forum_screen.dart';
 import '../features/spaces/space_screen.dart';
@@ -141,6 +142,8 @@ final routerProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootKey,
         pageBuilder: (_, _) => const MaterialPage(fullscreenDialog: true, child: LiveScreen()),
       ),
+      GoRoute(path: '/wallet', builder: (_, _) => const WalletScreen()),
+      GoRoute(path: '/wallet/:peer', builder: (_, s) => PeerWalletScreen(peer: s.pathParameters['peer']!)),
       GoRoute(path: '/calls', builder: (_, _) => const CallLogScreen()),
       GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),
       GoRoute(path: '/channels', builder: (_, _) => const ChannelsScreen()),

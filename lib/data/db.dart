@@ -111,6 +111,15 @@ class Db {
         PRAGMA user_version = 5;
       ''');
     }
+    if (v < 6) {
+      _db.execute('''
+        CREATE TABLE IF NOT EXISTS ledger(
+          pair TEXT NOT NULL, seq INTEGER NOT NULL, peer TEXT NOT NULL, data TEXT NOT NULL,
+          state TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY(pair, seq, state));
+        CREATE INDEX IF NOT EXISTS ledger_peer ON ledger(peer, state);
+        PRAGMA user_version = 6;
+      ''');
+    }
   }
 
   /// Copies every committed page into [destPath]. A plain file copy of a WAL
@@ -901,7 +910,7 @@ class Db {
   /// from user input.
   static const explorable = [
     'items', 'peers', 'grants', 'spaces', 'groups', 'files', 'bookmarks', 'receipts',
-    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'kv',
+    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'kv',
   ];
 
   Map<String, int> tableCounts() => {
@@ -1006,4 +1015,29 @@ class Db {
     }
     return n;
   }
+
+  // ---------- credit ledger ----------
+  // state: 'done' for entries both people signed; 'out' for a payment this
+  // device proposed; 'in' for one waiting for this person's approval.
+
+  void putLedger(String pair, int seq, String peer, String state, String data, int ts) => _db.execute(
+        'INSERT OR REPLACE INTO ledger(pair, seq, peer, data, state, ts) VALUES(?, ?, ?, ?, ?, ?)',
+        [pair, seq, peer, data, state, ts],
+      );
+
+  void deleteLedger(String pair, int seq, String state) =>
+      _db.execute('DELETE FROM ledger WHERE pair = ? AND seq = ? AND state = ?', [pair, seq, state]);
+
+  List<String> ledgerRows(String pair, {String state = 'done'}) => _db
+      .select('SELECT data FROM ledger WHERE pair = ? AND state = ? ORDER BY seq ASC', [pair, state])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  List<({String peer, String data, String state})> ledgerPending() => _db
+      .select("SELECT peer, data, state FROM ledger WHERE state != 'done' ORDER BY ts DESC")
+      .map((r) => (peer: r['peer'] as String, data: r['data'] as String, state: r['state'] as String))
+      .toList();
+
+  List<String> ledgerPeers() =>
+      _db.select('SELECT DISTINCT peer FROM ledger').map((r) => r['peer'] as String).toList();
 }

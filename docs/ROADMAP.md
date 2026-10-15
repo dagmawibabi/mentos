@@ -41,7 +41,7 @@ Goal: other apps can be built on the same core.
 | Story replies | Replies and answers to questions land in the author's DMs with a header showing what they answer. | ✅ |
 | Channels | Signed subscriptions the owner can count, subscribe/leave/mute, pinned post, comments on/off, silent posts, view counts, channel directory. With comments off, comments are hidden and the reply box disappears everywhere; a modified client could still send one, but it is not shown. | ✅ |
 | Notifications | OS notifications per category (DMs, groups, mentions, replies, likes, followers, stories, channels, invitations, transfers), previews on/off, quiet hours, muted chats (mentions still get through). | ✅ |
-| Background delivery | Notifications only arrive while the app process is alive. A foreground service (Android) would keep the node running. | 📐 |
+| Background delivery | Opt-in Android foreground service keeps the node online with a quiet permanent notification, a partial wake lock, and a prompt to exclude Mentos from battery optimisation. | ✅ |
 | Already there | Feed, stories, likes, bookmarks, comments, replies, reposts, polls, DMs, group chats, spaces with channels and forums. | ✅ |
 | Threads-style polish | Quote posts, multi-part thread composer, a Replies tab on profiles. | 📐 |
 | Hashtags and mentions in posts | Tappable `#tag` and `@name`, local tag pages. Mentions already trigger notifications. | 🚧 |
@@ -57,29 +57,24 @@ Goal: other apps can be built on the same core.
 | Accounts | Several identities on one device, each with its own keys, database and files; switch, add (with a way back), erase. | ✅ |
 | App lock | PIN stored as salted PBKDF2 (old PINs upgraded on unlock), backoff that survives restarts, biometric errors shown. | ✅ |
 
-## 4. Big features that need a decision first
+## 4. Calls, streaming and payments
 
-### Voice and video calls 📐
-- Signalling over the existing direct channel (`call` control messages: offer, accept, decline, end, mute state).
-- Media over a dedicated `mentos-call/0` ALPN: unreliable QUIC datagrams for frames, a stream for control. iroh already gives encryption and NAT traversal; a relay path works but adds latency.
-- Audio: Opus 48 kHz mono, 20 ms frames, through a small platform audio plugin.
-- Video: the platform's hardware encoder (Android MediaCodec, H.264) to keep battery use sane.
-- Group calls: full mesh up to about four people; above that the best-connected participant forwards (a peer-hosted SFU).
-- Risk: needs two real phones to test; the audio plugin and codec are most of the work.
+| Feature | What was built | Status |
+|---|---|---|
+| Call transport | `mentos-call/0`: one QUIC connection per participant carrying unreliable datagrams, refused for anyone the app did not invite. Verified between two real nodes over a relay: 50/50 datagrams each way, ~75 ms RTT; an uninvited node is refused. | ✅ |
+| Voice and video calls | Signalling over the direct channel; 16 kHz PCM with echo cancellation, per-speaker jitter buffers and mixing; 240p JPEG video at 8 fps; group calls as a full mesh up to 4; call log, missed-call notifications. Logic tested end to end in-process. | ✅ |
+| Live streams | Channel owners go live (video or audio); subscribers are notified and join; the host serves up to 16 viewers directly; live chat and hearts relayed by the host. | ✅ |
+| Payments | Mutual credit: bilateral, hash-chained ledgers where every entry is signed by both people, per-contact credit limits, approvals, requests. Threat model in `docs/PAYMENTS.md`. | ✅ |
+| Not tested on real phones yet | Audio quality, echo, video framing and battery use need two devices. | 🚧 |
+| Better codecs | Opus for audio (about 10x less bandwidth than raw PCM) and hardware H.264 for video. | 📐 |
+| Bigger streams | Viewers re-serving media to other viewers (a tree), so audiences can grow past what one phone can upload. | 📐 |
+| Credit across people | Paying through a chain of trust (Ada → Bo → Cy). | ⏳ |
 
-### Streaming 📐
-A live stream is a channel whose posts are short media segments. The streamer announces each segment on the channel's gossip topic; viewers fetch it from the streamer or from other viewers, who re-serve recent segments. Shares the codec work with calls.
-
-### Payments (a peer-maintained currency) 📐 — needs a decision
-Without a server, a currency must stop double spending. Options:
-1. **Mutual credit** (suggested first): balances are IOUs signed by both people. No global ledger, no double spending, works offline. Good for tips and paying friends.
-2. **Account chains with a witness quorum** (Nano-style): each account signs its own chain; a payment is final when enough online witnesses co-sign. The hard part is choosing witnesses that cannot be faked by one person running many nodes.
-3. **Use an existing network** (Lightning or a stablecoin) instead of a new currency.
-
-Nothing that looks like money should ship before its threat model is written and reviewed.
-
-## 5. Reliability work still open
-From `review/PROJECT_REVIEW_2026-10-10.md`: group keys sent before an invite is accepted, no key rotation when someone leaves, key files stored in plain files, unbounded gossip queues. These should be fixed before a public release.
+## 5. Reliability work
+From `review/PROJECT_REVIEW_2026-10-10.md`:
+- ✅ Group keys reach an invitee only after they accept; the owner rotates the key whenever someone leaves or is removed (both covered by tests). Pending invitations now survive restarts, expire after 14 days and can be revoked.
+- ✅ Group admins are no longer shown membership controls only the owner can use.
+- Still open: key files stored as plain files (needs Android Keystore / platform secure storage) and byte limits on the native gossip queue.
 
 ## 6. Building
 See the README. The APK needs the Rust library built for Android first (`native/build-android.ps1`, or `cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release` from `native/`).

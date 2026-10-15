@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/calls/devices.dart';
 import '../net/call/calls.dart';
 import '../net/call/live.dart';
+import '../net/pay/payments.dart';
 import '../net/transport.dart';
 import 'session.dart';
 
@@ -51,6 +52,27 @@ final liveStateProvider = StreamProvider<LiveState?>((ref) {
   return Stream.multi((out) {
     out.add(m.current);
     final sub = m.changes.listen(out.add);
+    out.onCancel = sub.cancel;
+  });
+});
+
+/// Mutual-credit payments for the open account.
+final paymentsProvider = Provider<Payments?>((ref) {
+  final s = ref.watch(sessionProvider);
+  if (s is! SessionReady) return null;
+  final p = Payments(s.engine);
+  ref.onDispose(() => unawaited(p.dispose()));
+  return p;
+});
+
+/// Ticks whenever a balance, approval or request changes.
+final paymentsTickProvider = StreamProvider<int>((ref) {
+  final p = ref.watch(paymentsProvider);
+  if (p == null) return Stream.value(0);
+  var n = 0;
+  return Stream.multi((out) {
+    out.add(n);
+    final sub = p.changes.listen((_) => out.add(++n));
     out.onCancel = sub.cancel;
   });
 });

@@ -24,6 +24,9 @@ class TestNetwork {
   final messages = <({String from, String to, Map<String, dynamic> body})>[];
   bool dropAcks = false;
 
+  /// Drop payment acceptances in flight, to test recovery.
+  bool dropApp = false;
+
   /// topic -> node ids that joined it, for in-process gossip.
   final topics = <String, Set<String>>{};
   Completer<bool>? sendGate;
@@ -67,7 +70,8 @@ class TestTransport implements Transport, MediaLink {
         network.sendGate != null) {
       if (!await network.sendGate!.future) return false;
     }
-    if (!(network.dropAcks && body['t'] == 'ack')) {
+    final droppedPay = network.dropApp && body['t'] == 'app' && (body['b'] as Map?)?['op'] == 'accept';
+    if (!(network.dropAcks && body['t'] == 'ack') && !droppedPay) {
       receiver.controller.add(DirectEvent(id, data));
     }
     return true;

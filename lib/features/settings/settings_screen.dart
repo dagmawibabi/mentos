@@ -179,6 +179,13 @@ class SettingsScreen extends ConsumerWidget {
           ),
           RowTile(icon: Icons.monitor_heart_outlined, title: 'Network diagnostics', onTap: () => context.push('/diagnostics')),
           RowTile(icon: Icons.block_rounded, title: 'Blocked people', onTap: () => context.push('/people?tab=3')),
+          SectionLabel('Money'),
+          RowTile(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'Wallet',
+            subtitle: 'Credits you and your contacts owe each other',
+            onTap: () => context.push('/wallet'),
+          ),
           SectionLabel('Identity'),
           RowTile(
             icon: Icons.switch_account_outlined,

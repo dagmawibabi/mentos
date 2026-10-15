@@ -162,6 +162,7 @@ class _Row extends StatelessWidget {
           'reacted ${a.text ?? ''} to your ${(a.scope ?? '').startsWith('story:') ? 'story' : 'message'}'),
       'subscribe' => (Icons.campaign_rounded, 'subscribed to ${a.text ?? 'your channel'}'),
       'call' => (Icons.call_missed_rounded, 'called you (${a.text ?? 'voice'})'),
+      'pay' => (Icons.account_balance_wallet_rounded, a.text ?? 'payment'),
       'sync' => (Icons.handshake_rounded, 'asked you to keep their messages'),
       'xfer' => (Icons.swap_horiz_rounded, 'wants to send ${a.text ?? 'a file'}'),
       'invite' => (Icons.group_add_outlined, 'invited you to ${a.text ?? 'a group'}'),
@@ -183,6 +184,8 @@ class _Row extends StatelessWidget {
             context.push('/chat/${a.actor}');
           case 'call':
             context.push('/calls');
+          case 'pay':
+            context.push('/wallet/${a.actor}');
           case 'subscribe':
             if (a.ref != null) context.push('/ch/${e.me.id}/${a.ref}');
           case 'xfer':
