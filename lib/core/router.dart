@@ -16,7 +16,10 @@ import '../features/chats/group_screen.dart';
 import '../features/chats/new_group_screen.dart';
 import '../features/files/files_screen.dart';
 import '../features/files/transfer_screen.dart';
+import '../features/network/diagnostics_screen.dart';
 import '../features/network/network_screen.dart';
+import '../features/network/node_screen.dart';
+import '../features/network/privacy_screen.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/profile/edit_profile_screen.dart';
 import '../features/profile/insights_screen.dart';
@@ -122,6 +125,9 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/s/:id/settings', builder: (_, s) => SpaceSettingsScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/connect', builder: (_, s) => ConnectScreen(scan: s.uri.queryParameters['scan'] == '1')),
+      GoRoute(path: '/diagnostics', builder: (_, _) => const DiagnosticsScreen()),
+      GoRoute(path: '/privacy', builder: (_, _) => const PrivacyScreen()),
+      GoRoute(path: '/node/:id', builder: (_, s) => NodeScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(path: '/backup', builder: (_, _) => const BackupScreen()),
       GoRoute(path: '/files', builder: (_, _) => const FilesScreen()),

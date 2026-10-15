@@ -29,6 +29,10 @@ typedef _FetchC = Int32 Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _FetchD = int Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef _CancelC = Int32 Function(Pointer<Utf8>);
 typedef _CancelD = int Function(Pointer<Utf8>);
+typedef _PingC = Int64 Function(Pointer<Utf8>);
+typedef _PingD = int Function(Pointer<Utf8>);
+typedef _IntC = Int32 Function();
+typedef _IntD = int Function();
 typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
 
@@ -51,7 +55,11 @@ class IrohNative {
         _status = lib.lookupFunction<_StrC, _StrD>('mentos_status'),
         _poll = lib.lookupFunction<_StrC, _StrD>('mentos_poll_event'),
         _lastError = lib.lookupFunction<_StrC, _StrD>('mentos_last_error'),
-        _free = lib.lookupFunction<_FreeC, _FreeD>('mentos_free');
+        _free = lib.lookupFunction<_FreeC, _FreeD>('mentos_free'),
+        _setOptions = _optional(() => lib.lookupFunction<_ConnectC, _ConnectD>('mentos_set_options')),
+        _diagnostics = _optional(() => lib.lookupFunction<_StrC, _StrD>('mentos_diagnostics')),
+        _ping = _optional(() => lib.lookupFunction<_PingC, _PingD>('mentos_ping')),
+        _networkChange = _optional(() => lib.lookupFunction<_IntC, _IntD>('mentos_network_change'));
 
   final _StartD _start;
   final _StopD _stop;
@@ -70,6 +78,57 @@ class IrohNative {
   final _StrD _poll;
   final _StrD _lastError;
   final _FreeD _free;
+
+  // Added with diagnostics; an older library simply lacks them.
+  final _ConnectD? _setOptions;
+  final _StrD? _diagnostics;
+  final _PingD? _ping;
+  final _IntD? _networkChange;
+
+  static T? _optional<T>(T Function() lookup) {
+    try {
+      return lookup();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get hasDiagnostics => _diagnostics != null;
+
+  /// Null on success, otherwise why the options were refused.
+  String? setOptions(String json) {
+    final f = _setOptions;
+    if (f == null) return 'this network library does not support privacy modes';
+    final j = json.toNativeUtf8();
+    try {
+      return f(j) == 0 ? null : (takeError() ?? 'options refused');
+    } finally {
+      malloc.free(j);
+    }
+  }
+
+  Map<String, dynamic>? diagnostics() {
+    final f = _diagnostics;
+    if (f == null) return null;
+    final raw = _take(f());
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    return decoded is Map ? decoded.cast<String, dynamic>() : null;
+  }
+
+  /// Microseconds, or -1.
+  int ping(String peer) {
+    final f = _ping;
+    if (f == null) return -1;
+    final p = peer.toNativeUtf8();
+    try {
+      return f(p);
+    } finally {
+      malloc.free(p);
+    }
+  }
+
+  void networkChange() => _networkChange?.call();
 
   static _CancelD? _lookupCancel(DynamicLibrary lib) {
     try {

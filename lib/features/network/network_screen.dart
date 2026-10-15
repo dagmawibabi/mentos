@@ -56,6 +56,8 @@ class NetworkScreen extends ConsumerWidget {
           ],
         ),
         actions: [
+          IconBtn(Icons.monitor_heart_outlined, tooltip: 'Diagnostics', onTap: () => context.push('/diagnostics')),
+          IconBtn(Icons.shield_outlined, tooltip: 'Privacy', onTap: () => context.push('/privacy')),
           IconBtn(Icons.hub_outlined, tooltip: 'Iroh network', onTap: () {
             Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const IrohNetworkPage()));
           }),
@@ -360,8 +362,8 @@ class _PeerRow extends ConsumerWidget {
       title: Text(name),
       subtitle: Text(subtitle, style: Txt.mono(live ? p.accent : p.muted, size: 11)),
       trailing: action,
-      onTap: () => showPeerTech(context, id),
-      onLongPress: () => context.push('/u/$id'),
+      onTap: () => context.push('/node/$id'),
+      onLongPress: () => showPeerTech(context, id),
     );
   }
 }

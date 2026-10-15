@@ -126,7 +126,7 @@ class _PeerTechSheet extends ConsumerWidget {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(onPressed: () => context.push('/u/$id'), child: const Text('Profile')),
+                  child: OutlinedButton(onPressed: () => context.push('/node/$id'), child: const Text('Details')),
                 ),
                 const SizedBox(width: Space.sm),
                 Expanded(

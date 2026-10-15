@@ -23,7 +23,16 @@ class Settings {
     this.lockHash = '',
     this.lockAfter = 60,
     this.lockBio = false,
+    this.privacy = 'standard',
+    this.proxyUrl = defaultProxy,
+    this.notify = const NotifyPrefs(),
+    this.xferAutoAccept = false,
+    this.xferAutoMaxMb = 50,
+    this.xferParallel = 3,
   });
+
+  /// Orbot's HTTP CONNECT proxy.
+  static const defaultProxy = 'http://127.0.0.1:8118';
 
   final ThemeMode themeMode;
   final bool readReceipts;
@@ -67,6 +76,28 @@ class Settings {
   final int lockAfter;
   final bool lockBio;
 
+  /// standard | relay | tor. See native/src/diag.rs.
+  final String privacy;
+
+  /// HTTP CONNECT proxy for relay and DNS traffic in tor mode.
+  final String proxyUrl;
+  final NotifyPrefs notify;
+
+  /// Accept file transfers from people you follow without asking.
+  final bool xferAutoAccept;
+
+  /// Largest file accepted automatically, in megabytes.
+  final int xferAutoMaxMb;
+
+  /// Incoming transfers that may run at once; the rest wait in a queue.
+  final int xferParallel;
+
+  /// The options string handed to the native node before it binds.
+  Map<String, Object?> get netOptions => {
+        'privacy': privacy,
+        if (privacy == 'tor') 'proxy': proxyUrl,
+      };
+
   Settings copyWith({
     ThemeMode? themeMode,
     bool? readReceipts,
@@ -87,6 +118,12 @@ class Settings {
     String? lockHash,
     int? lockAfter,
     bool? lockBio,
+    String? privacy,
+    String? proxyUrl,
+    NotifyPrefs? notify,
+    bool? xferAutoAccept,
+    int? xferAutoMaxMb,
+    int? xferParallel,
   }) =>
       Settings(
         themeMode: themeMode ?? this.themeMode,
@@ -108,6 +145,12 @@ class Settings {
         lockHash: lockHash ?? this.lockHash,
         lockAfter: lockAfter ?? this.lockAfter,
         lockBio: lockBio ?? this.lockBio,
+        privacy: privacy ?? this.privacy,
+        proxyUrl: proxyUrl ?? this.proxyUrl,
+        notify: notify ?? this.notify,
+        xferAutoAccept: xferAutoAccept ?? this.xferAutoAccept,
+        xferAutoMaxMb: xferAutoMaxMb ?? this.xferAutoMaxMb,
+        xferParallel: xferParallel ?? this.xferParallel,
       );
 
   String encode() => jsonEncode({
@@ -130,6 +173,12 @@ class Settings {
         'pin': lockHash,
         'lock': lockAfter,
         'bio': lockBio,
+        'priv': privacy,
+        'proxy': proxyUrl,
+        'notify': notify.toJson(),
+        'xa': xferAutoAccept,
+        'xmax': xferAutoMaxMb,
+        'xpar': xferParallel,
       });
 
   static Settings decode(String? s) {
@@ -156,9 +205,144 @@ class Settings {
         lockHash: (j['pin'] as String?) ?? '',
         lockAfter: (j['lock'] as num?)?.toInt() ?? 60,
         lockBio: j['bio'] == true,
+        privacy: const {'standard', 'relay', 'tor'}.contains(j['priv']) ? j['priv'] as String : 'standard',
+        proxyUrl: j['proxy'] is String ? j['proxy'] as String : defaultProxy,
+        notify: NotifyPrefs.fromJson(j['notify']),
+        xferAutoAccept: j['xa'] == true,
+        xferAutoMaxMb: ((j['xmax'] as num?)?.toInt() ?? 50).clamp(1, 4096),
+        xferParallel: ((j['xpar'] as num?)?.toInt() ?? 3).clamp(1, 8),
       );
     } catch (_) {
       return const Settings();
     }
+  }
+}
+
+/// Which events raise an operating-system notification.
+class NotifyPrefs {
+  const NotifyPrefs({
+    this.dms = true,
+    this.groups = true,
+    this.mentions = true,
+    this.replies = true,
+    this.likes = false,
+    this.follows = true,
+    this.invites = true,
+    this.transfers = true,
+    this.stories = false,
+    this.channels = true,
+    this.preview = true,
+    this.quietFrom = -1,
+    this.quietTo = -1,
+  });
+
+  final bool dms;
+  final bool groups;
+  final bool mentions;
+  final bool replies;
+  final bool likes;
+  final bool follows;
+  final bool invites;
+  final bool transfers;
+  final bool stories;
+  final bool channels;
+
+  /// Show who and what in the notification. Off shows only "New message".
+  final bool preview;
+
+  /// Quiet hours as minutes after midnight; -1 means off.
+  final int quietFrom;
+  final int quietTo;
+
+  bool get hasQuietHours => quietFrom >= 0 && quietTo >= 0 && quietFrom != quietTo;
+
+  /// True when [at] falls inside quiet hours, including windows across midnight.
+  bool quietAt(DateTime at) {
+    if (!hasQuietHours) return false;
+    final m = at.hour * 60 + at.minute;
+    return quietFrom < quietTo ? m >= quietFrom && m < quietTo : m >= quietFrom || m < quietTo;
+  }
+
+  /// Whether a notification of [category] is wanted. Categories match the
+  /// field names; unknown categories are allowed.
+  bool wants(String category) => switch (category) {
+        'dm' => dms,
+        'group' => groups,
+        'mention' => mentions,
+        'reply' => replies,
+        'like' => likes,
+        'follow' => follows,
+        'invite' => invites,
+        'xfer' => transfers,
+        'story' => stories,
+        'channel' => channels,
+        _ => true,
+      };
+
+  NotifyPrefs copyWith({
+    bool? dms,
+    bool? groups,
+    bool? mentions,
+    bool? replies,
+    bool? likes,
+    bool? follows,
+    bool? invites,
+    bool? transfers,
+    bool? stories,
+    bool? channels,
+    bool? preview,
+    int? quietFrom,
+    int? quietTo,
+  }) =>
+      NotifyPrefs(
+        dms: dms ?? this.dms,
+        groups: groups ?? this.groups,
+        mentions: mentions ?? this.mentions,
+        replies: replies ?? this.replies,
+        likes: likes ?? this.likes,
+        follows: follows ?? this.follows,
+        invites: invites ?? this.invites,
+        transfers: transfers ?? this.transfers,
+        stories: stories ?? this.stories,
+        channels: channels ?? this.channels,
+        preview: preview ?? this.preview,
+        quietFrom: quietFrom ?? this.quietFrom,
+        quietTo: quietTo ?? this.quietTo,
+      );
+
+  Map<String, Object> toJson() => {
+        'dm': dms,
+        'gr': groups,
+        'me': mentions,
+        're': replies,
+        'li': likes,
+        'fo': follows,
+        'in': invites,
+        'xf': transfers,
+        'st': stories,
+        'ch': channels,
+        'pv': preview,
+        'qf': quietFrom,
+        'qt': quietTo,
+      };
+
+  static NotifyPrefs fromJson(Object? j) {
+    if (j is! Map) return const NotifyPrefs();
+    int minutes(Object? v) => v is num && v >= -1 && v < 1440 ? v.toInt() : -1;
+    return NotifyPrefs(
+      dms: j['dm'] != false,
+      groups: j['gr'] != false,
+      mentions: j['me'] != false,
+      replies: j['re'] != false,
+      likes: j['li'] == true,
+      follows: j['fo'] != false,
+      invites: j['in'] != false,
+      transfers: j['xf'] != false,
+      stories: j['st'] == true,
+      channels: j['ch'] != false,
+      preview: j['pv'] != false,
+      quietFrom: minutes(j['qf']),
+      quietTo: minutes(j['qt']),
+    );
   }
 }

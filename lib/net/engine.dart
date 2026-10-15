@@ -145,6 +145,7 @@ class Engine {
     await _loadTombstones();
     _loadInvites();
     _bindStarted = DateTime.now();
+    _applyNetOptions();
     try {
       await net.start(
         secret: me.seed,
@@ -326,7 +327,17 @@ class Engine {
     _pending.clear();
   }
 
+  /// Last refusal from the native node for the privacy options, if any.
+  String? netOptionsError;
+
+  void _applyNetOptions() {
+    final Object tools = net;
+    if (tools is! NetTools) return;
+    netOptionsError = tools.setOptions(_settings.netOptions);
+  }
+
   void updateSettings(Settings s) {
+    final rebind = s.privacy != _settings.privacy || (s.privacy == 'tor' && s.proxyUrl != _settings.proxyUrl);
     final profileChanged =
         s.keepPosts != _settings.keepPosts ||
         s.keepProfile != _settings.keepProfile ||
@@ -339,6 +350,15 @@ class Engine {
       unawaited(updateProfile(name: p.name, bio: p.bio, avatar: p.avatar));
       if (!s.keepPosts) unawaited(_broadcastRevoke(Scope.feed(me.id)));
     }
+    if (rebind && _running) unawaited(_rebind());
+  }
+
+  /// Privacy modes change which transports the endpoint binds, so the node
+  /// restarts with the new options.
+  Future<void> _rebind() async {
+    final wasHeld = _held;
+    await disconnectNode();
+    if (!wasHeld) await connectNode();
   }
 
   void _emit(Iterable<String> keys) {
@@ -3158,6 +3178,16 @@ class Engine {
       db.grants().where((g) => g.dir == GrantDir.inbound).toList();
 
   Map<String, Set<String>> get neighbors => _neighbors;
+
+  /// Gossip topic id -> what it carries, for the explorers.
+  Map<String, String> topicLabels() => {
+        for (final e in _spaceTopics.entries) e.key: 'space · ${db.space(e.value)?.name ?? shortId(e.value)}',
+        for (final e in _feedTopics.entries) e.key: 'posts · ${nameOf(e.value)}',
+        for (final e in _groupTopics.entries) e.key: 'group · ${db.group(e.value)?.name ?? shortId(e.value)}',
+      };
+
+  /// When [peer] was last heard from on any path, ms since epoch.
+  int lastHeardFrom(String peer) => _lastHeard[peer] ?? 0;
   int get topicCount =>
       _spaceTopics.length + _feedTopics.length + _groupTopics.length;
 
@@ -3776,6 +3806,7 @@ class Engine {
       if (!current.running && _dataDir != null && !_bindInFlight) {
         _bindStarted = DateTime.now();
         _meshJoined = false;
+        _applyNetOptions();
         try {
           await net.start(
             secret: me.seed,

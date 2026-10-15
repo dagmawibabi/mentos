@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'iroh_native.dart';
 import 'transport.dart';
 
-class IrohTransport implements Transport {
+class IrohTransport implements Transport, NetTools {
   IrohTransport(this._n);
 
   final IrohNative _n;
@@ -172,12 +172,41 @@ class IrohTransport implements Transport {
     } catch (_) {}
   }
 
+  @override
+  Future<Map<String, dynamic>?> diagnostics() async {
+    final out = await _call('diag', null, null, lane: _diagLane, timeout: const Duration(seconds: 20));
+    return out is Map ? out.cast<String, dynamic>() : null;
+  }
+
+  @override
+  Future<double?> ping(String peer) async {
+    final out = await _call('ping', peer, null, lane: _diagLane, timeout: const Duration(seconds: 25));
+    return out is int && out >= 0 ? out / 1000 : null;
+  }
+
+  @override
+  String? setOptions(Map<String, Object?> options) {
+    try {
+      return _n.setOptions(jsonEncode(options));
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  @override
+  void networkChange() {
+    try {
+      _n.networkChange();
+    } catch (_) {}
+  }
+
   // Each worker runs blocking FFI calls one at a time. A blob fetch can hold
   // its worker for minutes, so fetches and imports get their own lanes and
   // never delay messages.
   final _msgLane = _Lane();
   final _blobLane = _Lane();
   final _fileLane = _Lane();
+  final _diagLane = _Lane();
 
   Future<Object?> _call(
     String op,
@@ -334,6 +363,10 @@ void _nativeIo(SendPort parent) {
           } catch (e) {
             reply.send(_Failure(e is StateError ? e.message : '$e'));
           }
+        case 'diag':
+          reply.send(n.diagnostics());
+        case 'ping':
+          reply.send(n.ping(msg[1] as String));
         default:
           reply.send(false);
       }

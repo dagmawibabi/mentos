@@ -162,6 +162,17 @@ class SettingsScreen extends ConsumerWidget {
           ),
           RowTile(icon: Icons.folder_outlined, title: 'Files on this phone', onTap: () => context.push('/files')),
           RowTile(icon: Icons.hub_outlined, title: 'Network and custody', onTap: () => context.go('/network')),
+          RowTile(
+            icon: Icons.shield_outlined,
+            title: 'Privacy and transports',
+            subtitle: switch (s.privacy) {
+              'relay' => 'Hide my IP',
+              'tor' => 'Tor via ${s.proxyUrl}',
+              _ => 'Standard',
+            },
+            onTap: () => context.push('/privacy'),
+          ),
+          RowTile(icon: Icons.monitor_heart_outlined, title: 'Network diagnostics', onTap: () => context.push('/diagnostics')),
           RowTile(icon: Icons.block_rounded, title: 'Blocked people', onTap: () => context.push('/people?tab=3')),
           SectionLabel('Identity'),
           RowTile(

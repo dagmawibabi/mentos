@@ -139,6 +139,23 @@ abstract class Transport {
   Future<NetStatus> status();
 }
 
+/// Optional tools a transport can offer for diagnostics and privacy. The
+/// offline and test transports do not implement it.
+abstract interface class NetTools {
+  /// A fresh measurement from the native node, or null when unavailable.
+  Future<Map<String, dynamic>?> diagnostics();
+
+  /// Round trip to [peer] in milliseconds, dialing if needed. Null on failure.
+  Future<double?> ping(String peer);
+
+  /// Privacy options applied the next time the node binds. Returns an error
+  /// message, or null on success.
+  String? setOptions(Map<String, Object?> options);
+
+  /// Tells iroh the device's network may have changed.
+  void networkChange();
+}
+
 /// Used when the native iroh library is not bundled. Everything works
 /// locally; nothing leaves the device.
 class OfflineTransport implements Transport {
