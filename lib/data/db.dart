@@ -104,6 +104,13 @@ class Db {
         PRAGMA user_version = 4;
       ''');
     }
+    if (v < 5) {
+      _db.execute('''
+        ALTER TABLE message_delivery ADD COLUMN delivered_at INTEGER;
+        ALTER TABLE message_delivery ADD COLUMN read_at INTEGER;
+        PRAGMA user_version = 5;
+      ''');
+    }
   }
 
   /// Copies every committed page into [destPath]. A plain file copy of a WAL
@@ -758,6 +765,8 @@ class Db {
         attempts: r['attempts'] is num ? (r['attempts'] as num).toInt() : 0,
         nextAt: r['next_at'] is num ? (r['next_at'] as num).toInt() : 0,
         error: r['error'] is String ? r['error'] as String : null,
+        deliveredAt: r['delivered_at'] is num ? (r['delivered_at'] as num).toInt() : null,
+        readAt: r['read_at'] is num ? (r['read_at'] as num).toInt() : null,
       );
     } catch (_) {
       return null;
@@ -831,11 +840,13 @@ class Db {
   }) {
     // Peer comes from the authenticated direct transport, never from the body.
     // Late receipts may upgrade cancelled jobs: cancellation cannot unsend bytes.
+    final now = nowMs();
     _db.execute(
-      "UPDATE message_delivery SET state = ?, error = NULL WHERE id = ? AND peer = ? "
-      "AND state != 'saved' AND state != 'read' "
+      "UPDATE message_delivery SET state = ?, error = NULL, "
+      'delivered_at = COALESCE(delivered_at, ?), read_at = CASE WHEN ? THEN COALESCE(read_at, ?) ELSE read_at END '
+      "WHERE id = ? AND peer = ? AND state != 'saved' AND state != 'read' "
       'AND EXISTS(SELECT 1 FROM items WHERE id = ? AND scope = ? AND owned = 1)',
-      [read ? 'read' : 'delivered', id, peer, id, scope],
+      [read ? 'read' : 'delivered', now, read ? 1 : 0, now, id, peer, id, scope],
     );
   }
 

@@ -173,6 +173,7 @@ class PostView {
     this.ai = false,
     this.nsfw = false,
     this.views = 0,
+    this.viewers = const [],
     this.channelId,
   });
 
@@ -192,6 +193,9 @@ class PostView {
   final bool ai;
   final bool nsfw;
   final int views;
+
+  /// Who viewed it; filled only for your own posts.
+  final List<String> viewers;
   final String? channelId;
 
   String get id => item.id;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +19,95 @@ import '../../widgets/nsfw.dart';
 import '../../widgets/ui.dart';
 import '../chats/share_sheet.dart';
 
+/// Who saw a post. Authors see names; everyone else sees the count.
+void showViewers(BuildContext context, WidgetRef ref, PostView post) {
+  final e = ref.read(engineProvider);
+  if (post.author != e.me.id) {
+    toast(context, '${post.views} ${post.views == 1 ? 'view' : 'views'}');
+    return;
+  }
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (ctx) {
+      final p = ctx.pal;
+      return SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * .7),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm),
+                child: Text('${post.views} ${post.views == 1 ? 'view' : 'views'}', style: Txt.title(p.ink)),
+              ),
+              if (post.viewers.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(Space.gutter),
+                  child: Text(
+                    'No views yet. A view counts when someone has your post on screen for a moment.',
+                    style: Txt.small(p.muted),
+                  ),
+                ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final id in post.viewers)
+                      ListTile(
+                        leading: Avatar(id: id, size: 34),
+                        title: Text(e.nameOf(id)),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          context.push('/u/$id');
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// Counts a view once a post has stayed on screen for a moment, like an
+/// impression on X. [Engine.recordView] sends at most one per post.
+class _Impression extends ConsumerStatefulWidget {
+  const _Impression({required this.post, required this.child});
+  final PostView post;
+  final Widget child;
+
+  @override
+  ConsumerState<_Impression> createState() => _ImpressionState();
+}
+
+class _ImpressionState extends ConsumerState<_Impression> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
+      final e = ref.read(maybeEngineProvider);
+      if (e != null && widget.post.author != e.me.id) unawaited(e.recordView(widget.post.item));
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class PostCard extends ConsumerWidget {
   const PostCard({super.key, required this.post, this.detailed = false});
   final PostView post;
@@ -30,130 +121,133 @@ class PostCard extends ConsumerWidget {
     final name = post.author == e.me.id ? (e.myProfile.displayName) : (author?.name ?? alias(post.author));
     final prov = ProvenanceTag.of(post.item);
 
-    return Pressable(
-      onTap: detailed
-          ? null
-          : () async {
-              final files = post.media.where((m) => !m.isImage && !m.isVideo && !m.isAudio).toList();
-              if (files.length == 1 && post.text.isEmpty && post.poll == null) {
-                final f = await e.openMedia(files.first, post.item);
-                if (!context.mounted) return;
-                if (f == null) {
-                  toast(context, 'File not reachable — the sender is offline.');
+    return _Impression(
+      post: post,
+      child: Pressable(
+        onTap: detailed
+            ? null
+            : () async {
+                final files = post.media.where((m) => !m.isImage && !m.isVideo && !m.isAudio).toList();
+                if (files.length == 1 && post.text.isEmpty && post.poll == null) {
+                  final f = await e.openMedia(files.first, post.item);
+                  if (!context.mounted) return;
+                  if (f == null) {
+                    toast(context, 'File not reachable — the sender is offline.');
+                    return;
+                  }
+                  await OpenFilex.open(f.path, type: files.first.mime);
                   return;
                 }
-                await OpenFilex.open(f.path, type: files.first.mime);
-                return;
-              }
-              context.push('/post/${post.id}');
-            },
-      onLongPress: () => showPostActions(context, ref, post),
-      child: Container(
-        color: Colors.transparent,
-        padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, Space.sm),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                GestureDetector(
-                  onTap: () => context.push(post.author == e.me.id ? '/me' : '/u/${post.author}'),
-                  child: Avatar(id: post.author, size: 38),
-                ),
-                const SizedBox(width: Space.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
-                          ),
-                          if (post.ai) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                              decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
-                              child: Text('AI', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
-                            ),
-                          ],
-                          if (post.nsfw) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                              decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
-                              child: Text('NSFW', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
-                            ),
-                          ],
-                          if (prov != Provenance.mine) ...[
-                            const SizedBox(width: 6),
-                            ProvenanceTag(prov, compact: true),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 1),
-                      Text(
-                        [timeAgo(post.item.ts), if (post.edited) 'edited', if (post.spaceId != null) 'in space']
-                            .join(' · '),
-                        style: Txt.mono(p.muted, size: 11),
-                      ),
-                    ],
-                  ),
-                ),
-                IconBtn(Icons.more_horiz_rounded,
-                    color: p.muted, size: 20, onTap: () => showPostActions(context, ref, post)),
-              ],
-            ),
-            NsfwGate(
-              nsfw: post.nsfw,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                context.push('/post/${post.id}');
+              },
+        onLongPress: () => showPostActions(context, ref, post),
+        child: Container(
+          color: Colors.transparent,
+          padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, Space.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  if (post.title.isNotEmpty) ...[
-                    const SizedBox(height: Space.md),
-                    Text(post.title, style: Txt.heading(p.ink)),
-                  ],
-                  if (post.text.isNotEmpty) ...[
-                    SizedBox(height: post.title.isEmpty ? Space.md : Space.sm),
-                    Text(
-                      post.text,
-                      style: detailed ? Txt.body(p.ink).copyWith(fontSize: 17, height: 1.45) : Txt.body(p.ink),
-                      maxLines: detailed ? null : 12,
-                      overflow: detailed ? null : TextOverflow.ellipsis,
+                  GestureDetector(
+                    onTap: () => context.push(post.author == e.me.id ? '/me' : '/u/${post.author}'),
+                    child: Avatar(id: post.author, size: 38),
+                  ),
+                  const SizedBox(width: Space.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
+                            ),
+                            if (post.ai) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
+                                child: Text('AI', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
+                              ),
+                            ],
+                            if (post.nsfw) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
+                                child: Text('NSFW', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
+                              ),
+                            ],
+                            if (prov != Provenance.mine) ...[
+                              const SizedBox(width: 6),
+                              ProvenanceTag(prov, compact: true),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 1),
+                        Text(
+                          [timeAgo(post.item.ts), if (post.edited) 'edited', if (post.spaceId != null) 'in space']
+                              .join(' · '),
+                          style: Txt.mono(p.muted, size: 11),
+                        ),
+                      ],
                     ),
-                  ],
-                  if (post.repost != null) ...[
-                    const SizedBox(height: Space.md),
-                    RepostEmbed(data: post.repost!),
-                  ],
-                  if (post.media.any((m) => m.isImage || m.isVideo)) ...[
-                    const SizedBox(height: Space.md),
-                    MediaGrid(media: post.media, item: post.item),
-                  ],
-                  for (final m in post.media.where((m) => !m.isImage && !m.isVideo)) ...[
-                    const SizedBox(height: Space.sm),
-                    m.isAudio
-                        ? Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(Radii.md)),
-                            child: VoicePlayer(media: m, item: post.item, fg: p.ink, track: p.raised),
-                          )
-                        : FileTile(media: m, item: post.item, fg: p.ink, bg: p.raised),
-                  ],
-                  if (post.poll != null) ...[
-                    const SizedBox(height: Space.md),
-                    PollView(
-                      state: post.poll!,
-                      onVote: (i) => e.vote(post.scope, post.id, post.poll!.myVote == i ? null : i),
-                    ),
-                  ],
+                  ),
+                  IconBtn(Icons.more_horiz_rounded,
+                      color: p.muted, size: 20, onTap: () => showPostActions(context, ref, post)),
                 ],
               ),
-            ),
-            const SizedBox(height: Space.sm),
-            _Actions(post: post),
-          ],
+              NsfwGate(
+                nsfw: post.nsfw,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (post.title.isNotEmpty) ...[
+                      const SizedBox(height: Space.md),
+                      Text(post.title, style: Txt.heading(p.ink)),
+                    ],
+                    if (post.text.isNotEmpty) ...[
+                      SizedBox(height: post.title.isEmpty ? Space.md : Space.sm),
+                      Text(
+                        post.text,
+                        style: detailed ? Txt.body(p.ink).copyWith(fontSize: 17, height: 1.45) : Txt.body(p.ink),
+                        maxLines: detailed ? null : 12,
+                        overflow: detailed ? null : TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (post.repost != null) ...[
+                      const SizedBox(height: Space.md),
+                      RepostEmbed(data: post.repost!),
+                    ],
+                    if (post.media.any((m) => m.isImage || m.isVideo)) ...[
+                      const SizedBox(height: Space.md),
+                      MediaGrid(media: post.media, item: post.item),
+                    ],
+                    for (final m in post.media.where((m) => !m.isImage && !m.isVideo)) ...[
+                      const SizedBox(height: Space.sm),
+                      m.isAudio
+                          ? Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(Radii.md)),
+                              child: VoicePlayer(media: m, item: post.item, fg: p.ink, track: p.raised),
+                            )
+                          : FileTile(media: m, item: post.item, fg: p.ink, bg: p.raised),
+                    ],
+                    if (post.poll != null) ...[
+                      const SizedBox(height: Space.md),
+                      PollView(
+                        state: post.poll!,
+                        onVote: (i) => e.vote(post.scope, post.id, post.poll!.myVote == i ? null : i),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: Space.sm),
+              _Actions(post: post),
+            ],
+          ),
         ),
       ),
     );
@@ -196,6 +290,13 @@ class _Actions extends ConsumerWidget {
           onTap: () => showShareSheet(context, ref, post),
         ),
         const Spacer(),
+        if (post.views > 0 || post.author == e.me.id)
+          _Action(
+            icon: Icons.bar_chart_rounded,
+            color: p.muted,
+            count: post.views,
+            onTap: () => showViewers(context, ref, post),
+          ),
         _Action(
           icon: post.bookmarked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
           color: post.bookmarked ? p.ink : p.muted,

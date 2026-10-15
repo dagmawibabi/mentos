@@ -2274,7 +2274,8 @@ class Engine {
           ? item.e.scope
           : Scope.post(item.author, item.id),
       {'target': item.id},
-      keep: false,
+      // Same consent as likes: lets the author keep the count across restarts.
+      keep: _settings.keepReplies,
     );
   }
 
@@ -2947,6 +2948,7 @@ class Engine {
         ai: p.body['ai'] == true,
         nsfw: p.body['nsfw'] == true,
         views: (f.views[p.id] ?? const <String>{}).length,
+        viewers: p.author == me.id ? (f.views[p.id] ?? const <String>{}).toList() : const [],
         channelId:
             (p.body['channel'] is String ? p.body['channel'] as String : null) ??
             (const {'bcast', 'chan'}.contains(Scope.type(p.e.scope))
