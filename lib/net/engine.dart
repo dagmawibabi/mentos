@@ -1764,6 +1764,29 @@ class Engine {
             _emit({Ch.activity});
           }
         }
+      case K.react when type == 'story':
+        final target = e.target;
+        if (target != null && Scope.parts(e.scope).elementAtOrNull(1) == me.id && e.body['on'] != false) {
+          final emoji = e.body['emoji'] is String ? e.body['emoji'] as String : '';
+          db.addActivity(Activity(
+            id: 'sreact:${e.author}:$target',
+            kind: 'react',
+            actor: e.author,
+            ref: target,
+            scope: e.scope,
+            text: emoji,
+            ts: e.ts,
+          ));
+          _notify(
+            at: e.ts,
+            id: 'sreact:${e.author}:$target:$emoji',
+            title: nameOf(e.author),
+            body: 'Reacted $emoji to your story',
+            route: '/story/${me.id}',
+            category: 'like',
+          );
+          _emit({Ch.activity, Ch.stories});
+        }
       case K.react:
         final target = e.target;
         if (target != null &&
@@ -2091,6 +2114,10 @@ class Engine {
         final peer = Scope.dmPeer(e.scope, me.id);
         if (peer == null) return;
         await _sendOrQueue(e.id, peer, wire);
+      case 'story' when parts.length > 1 && parts[1] != me.id:
+        // Likes, views and reactions on someone else's story go to that
+        // author, not to this person's own followers.
+        await _sendOrQueue(e.id, parts[1], wire);
       case 'feed' || 'story' || 'profile' || 'files' || 'bcast':
         if (!_settings.discoverable) {
           await _queueFanout(
@@ -2256,12 +2283,20 @@ class Engine {
     );
   }
 
-  Future<void> storyReply(Item s, String text) => _publish(
-    K.comment,
-    s.e.scope,
-    {'text': text.trim(), 'target': s.id, 'replyTo': s.id},
-    keep: _settings.keepReplies,
+  /// Replies to a story land in the author's DMs, like Instagram, with a
+  /// reference to the story so the chat can show what was answered.
+  Future<void> storyReply(Item s, String text, {String? prompt}) => sendMessage(
+    Scope.dm(me.id, s.author),
+    text: text.trim(),
+    story: {
+      'id': s.id,
+      'a': s.author,
+      if (s.body['text'] is String) 'text': _clip(s.body['text'] as String, 120),
+      'prompt': ?prompt,
+    },
   );
+
+  static String _clip(String s, int n) => s.length <= n ? s : '${s.substring(0, n)}…';
 
   Future<void> recordView(Item item) async {
     if (item.author == me.id) return;
@@ -2304,9 +2339,11 @@ class Engine {
     MediaRef? media,
     int color = 0,
     bool nsfw = false,
+    List<StorySticker> stickers = const [],
   }) => _publish(K.story, Scope.story(me.id), {
     'text': ?text,
     if (media != null) 'media': [media.toJson()],
+    if (stickers.isNotEmpty) 'stk': [for (final s in stickers) s.toJson()],
     'color': color,
     if (nsfw) 'nsfw': true,
     'exp': nowMs() + const Duration(hours: 24).inMilliseconds,
@@ -2320,6 +2357,7 @@ class Engine {
     Poll? poll,
     bool forwarded = false,
     bool nsfw = false,
+    Map<String, dynamic>? story,
   }) {
     final keep = switch (Scope.type(scope)) {
       'dm' => true,
@@ -2338,6 +2376,7 @@ class Engine {
       'poll': ?poll?.toJson(),
       if (forwarded) 'fwd': true,
       if (nsfw) 'nsfw': true,
+      'story': ?story,
       if (ttl > 0) 'exp': nowMs() + ttl * 1000,
     }, keep: keep);
   }

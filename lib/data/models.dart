@@ -120,8 +120,9 @@ class Envelope {
       case K.profile:
         return scope == Scope.profile(author);
       case K.msg:
-      case K.react:
         return chats.contains(type);
+      case K.react:
+        return chats.contains(type) || type == 'story';
       case K.post:
         return posts.contains(type);
       case K.comment:
@@ -239,6 +240,22 @@ class Envelope {
     if (reply != null && reply is! String) return false;
     final emoji = body['emoji'];
     if (emoji != null && (emoji is! String || emoji.length > 32)) return false;
+    final stickers = body['stk'];
+    if (stickers != null) {
+      if (kind != K.story || stickers is! List || stickers.length > StorySticker.max) return false;
+      for (final st in stickers) {
+        if (StorySticker.fromJson(st) == null) return false;
+      }
+    }
+    final story = body['story'];
+    if (story != null) {
+      if (kind != K.msg || story is! Map) return false;
+      if (story['id'] is! String || story['a'] is! String) return false;
+      final t = story['text'];
+      if (t != null && (t is! String || t.length > 200)) return false;
+      final q = story['prompt'];
+      if (q != null && (q is! String || q.length > 200)) return false;
+    }
     return true;
   }
 
@@ -942,4 +959,78 @@ class OsNote {
   final int at;
   final String? route;
   final String? scope;
+}
+
+enum StickerKind { emoji, text, link, mention, ask }
+
+/// Something placed on a story. Position is a fraction of the story's width
+/// and height so it lands in the same place on every screen.
+class StorySticker {
+  const StorySticker({
+    required this.kind,
+    required this.value,
+    this.x = .5,
+    this.y = .5,
+    this.scale = 1,
+    this.label,
+  });
+
+  static const max = 12;
+
+  final StickerKind kind;
+
+  /// Emoji, text, URL, mentioned node id, or the question asked.
+  final String value;
+  final double x;
+  final double y;
+  final double scale;
+
+  /// Shown instead of the raw URL for links, or a name for mentions.
+  final String? label;
+
+  StorySticker copyWith({double? x, double? y, double? scale}) =>
+      StorySticker(kind: kind, value: value, x: x ?? this.x, y: y ?? this.y, scale: scale ?? this.scale, label: label);
+
+  Map<String, Object> toJson() => {
+        't': kind.name,
+        'v': value,
+        'x': double.parse(x.toStringAsFixed(3)),
+        'y': double.parse(y.toStringAsFixed(3)),
+        if (scale != 1) 's': double.parse(scale.toStringAsFixed(2)),
+        if (label != null && label!.isNotEmpty) 'l': label!,
+      };
+
+  /// Null for anything a renderer should not trust.
+  static StorySticker? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final kind = StickerKind.values.asNameMap()[j['t']];
+    final v = j['v'];
+    if (kind == null || v is! String || v.isEmpty || v.length > 300) return null;
+    double frac(Object? n, double d) => n is num && n.isFinite ? n.toDouble().clamp(0.0, 1.0) : d;
+    final s = j['s'];
+    final label = j['l'];
+    if (label != null && (label is! String || label.length > 80)) return null;
+    switch (kind) {
+      case StickerKind.emoji:
+        if (v.length > 16) return null;
+      case StickerKind.link:
+        final u = Uri.tryParse(v);
+        if (u == null || !(u.scheme == 'https' || u.scheme == 'http') || u.host.isEmpty) return null;
+      case StickerKind.mention:
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(v)) return null;
+      case StickerKind.text || StickerKind.ask:
+        if (v.length > 200) return null;
+    }
+    return StorySticker(
+      kind: kind,
+      value: v,
+      x: frac(j['x'], .5),
+      y: frac(j['y'], .5),
+      scale: s is num && s.isFinite ? s.toDouble().clamp(.5, 3.0) : 1,
+      label: label as String?,
+    );
+  }
+
+  static List<StorySticker> listFrom(Object? j) =>
+      j is List ? j.map(fromJson).whereType<StorySticker>().take(max).toList() : const [];
 }
