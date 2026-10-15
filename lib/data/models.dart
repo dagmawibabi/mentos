@@ -247,6 +247,17 @@ class Envelope {
         if (StorySticker.fromJson(st) == null) return false;
       }
     }
+    if (kind == K.host) {
+      final note = body['note'];
+      if (note != null && (note is! String || note.length > 1000)) return false;
+      final folder = body['folder'];
+      if (folder != null && (folder is! String || folder.length > 60)) return false;
+      final tags = body['tags'];
+      if (tags != null) {
+        if (tags is! List || tags.length > HostMeta.maxTags) return false;
+        if (tags.any((t) => t is! String || t.isEmpty || t.length > 32)) return false;
+      }
+    }
     final story = body['story'];
     if (story != null) {
       if (kind != K.msg || story is! Map) return false;
@@ -820,7 +831,7 @@ class GroupInfo {
 
 enum XferDir { out, inbound }
 
-enum XferState { offer, active, done, failed, declined, cancelled }
+enum XferState { offer, queued, active, done, failed, declined, cancelled }
 
 class FileTransfer {
   FileTransfer({
@@ -848,7 +859,7 @@ class FileTransfer {
 
   int get total => media.size;
   double get progress => total <= 0 ? 0 : (done / total).clamp(0, 1);
-  bool get moving => state == XferState.offer || state == XferState.active;
+  bool get moving => state == XferState.offer || state == XferState.queued || state == XferState.active;
 
   void bump(int n) {
     final now = nowMs();
@@ -1033,4 +1044,35 @@ class StorySticker {
 
   static List<StorySticker> listFrom(Object? j) =>
       j is List ? j.map(fromJson).whereType<StorySticker>().take(max).toList() : const [];
+}
+
+/// Description, folder and tags a host attached to a hosted file.
+class HostMeta {
+  const HostMeta({this.note = '', this.folder = '', this.tags = const []});
+  static const maxTags = 8;
+
+  final String note;
+  final String folder;
+  final List<String> tags;
+
+  static HostMeta of(Item i) => HostMeta(
+        note: i.body['note'] is String ? i.body['note'] as String : '',
+        folder: i.body['folder'] is String ? i.body['folder'] as String : '',
+        tags: [for (final t in (i.body['tags'] is List ? i.body['tags'] as List : const [])) if (t is String) t],
+      );
+
+  /// Lowercase, no '#', no spaces, unique, at most [maxTags].
+  static List<String> cleanTags(Iterable<String> raw) {
+    final out = <String>[];
+    for (final t in raw) {
+      final c = t.trim().toLowerCase().replaceAll('#', '').replaceAll(RegExp(r'\s+'), '-');
+      if (c.isEmpty || c.length > 32 || out.contains(c)) continue;
+      out.add(c);
+      if (out.length == maxTags) break;
+    }
+    return out;
+  }
+
+  /// "travel, #Photos 2024" -> [travel, photos-2024]
+  static List<String> parseTags(String input) => cleanTags(input.split(RegExp(r'[,\n]')));
 }

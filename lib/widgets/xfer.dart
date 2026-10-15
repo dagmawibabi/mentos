@@ -79,6 +79,7 @@ class XferTile extends ConsumerWidget {
     final label = switch (x.state) {
       XferState.offer =>
         x.dir == XferDir.inbound ? 'waiting for you' : 'waiting for them',
+      XferState.queued => 'queued, starts when a slot frees',
       XferState.active => 'moving',
       XferState.done => 'complete',
       XferState.failed => x.error ?? 'failed',
@@ -196,6 +197,15 @@ class XferTile extends ConsumerWidget {
                       child: const Text('Open'),
                     ),
                   ],
+                ),
+              ),
+            if (x.state == XferState.failed || x.state == XferState.cancelled)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => e.retryTransfer(x.id),
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('Retry'),
                 ),
               ),
           ],

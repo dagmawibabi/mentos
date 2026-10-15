@@ -70,15 +70,9 @@ class MyProfileScreen extends ConsumerWidget {
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () async {
-                        final picked = await pickFiles(e.media);
-                        if (picked.isEmpty) return;
                         try {
-                          for (final f in picked) {
-                            final media = await importPending(e, f, scope: Scope.files(e.me.id));
-                            await e.hostFile(media, keep: true);
-                          }
-                          e.notifyFiles();
-                          if (context.mounted) toast(context, 'Hosting');
+                          final n = await hostPickedFiles(context, e);
+                          if (n > 0 && context.mounted) toast(context, 'Hosting');
                         } catch (err) {
                           if (context.mounted) toast(context, 'Could not host: $err');
                         }

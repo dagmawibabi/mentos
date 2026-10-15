@@ -139,7 +139,9 @@ Future<Engine> openEngine(
   await dir.create(recursive: true);
   final db = Db.open('${dir.path}/test.db', toHex(sha256(me.seed)));
   final net = transport?.call(me.id) ?? TestTransport(network, me.id);
-  final engine = Engine(me: me, db: db, net: net, media: MediaStore(dir.path, db, net), settings: settings);
+  final media = MediaStore(dir.path, db, net);
+  await media.init();
+  final engine = Engine(me: me, db: db, net: net, media: media, settings: settings);
   await engine.start('${dir.path}/node');
   return engine;
 }

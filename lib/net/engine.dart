@@ -3327,9 +3327,12 @@ class Engine {
       for (final i in hosted(a)) {
         final refs = MediaRef.listFrom(i.body['media']);
         final name = refs.firstOrNull?.name ?? '';
+        final meta = HostMeta.of(i);
         if (needle.isEmpty ||
             name.toLowerCase().contains(needle) ||
-            (i.body['note'] as String? ?? '').toLowerCase().contains(needle)) {
+            meta.note.toLowerCase().contains(needle) ||
+            meta.folder.toLowerCase().contains(needle) ||
+            meta.tags.any((t) => t.contains(needle.replaceFirst('#', '')))) {
           out.add(i);
         }
       }
@@ -3340,11 +3343,16 @@ class Engine {
   Future<Item> hostFile(
     MediaRef ref, {
     String note = '',
+    String folder = '',
+    List<String> tags = const [],
     bool keep = true,
   }) async {
+    final cleanTags = HostMeta.cleanTags(tags);
     final e = await _publish(K.host, Scope.files(me.id), {
       'media': [ref.toJson()],
-      if (note.isNotEmpty) 'note': note,
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+      if (folder.trim().isNotEmpty) 'folder': folder.trim(),
+      if (cleanTags.isNotEmpty) 'tags': cleanTags,
     }, keep: keep);
     _emit({Ch.files, Scope.files(me.id)});
     return Item(e, owned: true, kept: false);
@@ -3360,14 +3368,21 @@ class Engine {
   }) async {
     final refs = MediaRef.listFrom(item.body['media']);
     if (refs.isEmpty) return null;
-    return media.open(
+    final f = await media.open(
       refs.first,
       sources: sourcesFor(item),
       origin: 'cache',
       scope: item.e.scope,
       onProgress: onProgress,
     );
+    // A completed download counts once for the host, like a view.
+    if (f != null) unawaited(recordView(item));
+    return f;
   }
+
+  /// How many people downloaded a hosted file, as far as this device knows.
+  /// Exact for your own files.
+  int hostDownloads(Item item) => (fold(_mutationsFor([item.id]), {item.id: item}).views[item.id] ?? const {}).length;
 
   Future<GroupInfo> createGroup(String name, List<String> memberIds) async {
     final g = GroupInfo(
@@ -3478,18 +3493,62 @@ class Engine {
       _emit({Ch.xfers});
       return;
     }
-    x.state = XferState.active;
+    x.state = XferState.queued;
+    x.error = null;
     _emit({Ch.xfers});
     final ok = await _send(x.peer, {'t': 'xfer', 'op': 'accept', 'id': id});
     if (!ok) {
-      if (x.state == XferState.active) {
+      if (x.state == XferState.queued) {
         x.state = XferState.failed;
         x.error = 'could not reach them';
         _emit({Ch.xfers});
       }
       return;
     }
-    unawaited(_runInbound(x));
+    _pumpInbound();
+  }
+
+  /// Starts queued downloads while fewer than the configured number run.
+  void _pumpInbound() {
+    final limit = _settings.xferParallel.clamp(1, 8);
+    var running = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.active).length;
+    final waiting = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.queued).toList()
+      ..sort((a, b) => a.started.compareTo(b.started));
+    for (final x in waiting) {
+      if (running >= limit) break;
+      running++;
+      x.state = XferState.active;
+      unawaited(_runInbound(x).whenComplete(_pumpInbound));
+    }
+    _emit({Ch.xfers});
+  }
+
+  /// Tries a failed or cancelled transfer again: downloads restart, and an
+  /// offer that never reached them is sent again.
+  Future<void> retryTransfer(String id) async {
+    final x = _xfers[id];
+    if (x == null || !{XferState.failed, XferState.cancelled}.contains(x.state)) return;
+    x.error = null;
+    x.done = 0;
+    if (x.dir == XferDir.inbound) {
+      x.state = XferState.offer;
+      await respondTransfer(id, true);
+      return;
+    }
+    x.state = XferState.offer;
+    _emit({Ch.xfers});
+    final ok = await _send(x.peer, {'t': 'xfer', 'op': 'offer', 'id': x.id, 'media': x.media.toJson()});
+    if (!ok && x.state == XferState.offer) {
+      x.state = XferState.failed;
+      x.error = 'could not reach them';
+    }
+    _emit({Ch.xfers});
+  }
+
+  /// Forgets finished, failed, declined and cancelled transfers.
+  void clearFinishedTransfers() {
+    _xfers.removeWhere((_, x) => !x.moving);
+    _emit({Ch.xfers});
   }
 
   Future<void> cancelTransfer(String id) async {
@@ -3509,7 +3568,11 @@ class Engine {
     switch (op) {
       case 'offer':
         final media = MediaRef.fromJson(m['media']);
-        if (media == null) return;
+        if (media == null || id.isEmpty || id.length > 80) return;
+        if (db.peer(from)?.blocked ?? false) return;
+        // A re-sent offer for a transfer already moving here is ignored.
+        final prior = _xfers[id];
+        if (prior != null && (prior.peer != from || prior.moving)) return;
         _xfers[id] = FileTransfer(
           id: id,
           peer: from,
@@ -3527,6 +3590,14 @@ class Engine {
             ts: nowMs(),
           ),
         );
+        final auto = _settings.xferAutoAccept &&
+            (db.peer(from)?.iFollow ?? false) &&
+            media.size <= _settings.xferAutoMaxMb * 1024 * 1024;
+        if (auto) {
+          _emit({Ch.xfers, Ch.activity});
+          unawaited(respondTransfer(id, true));
+          return;
+        }
         pushAlert(
           Alert(
             id: 'xfer:$id',
