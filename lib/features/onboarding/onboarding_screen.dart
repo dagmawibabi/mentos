@@ -8,6 +8,7 @@ import '../../core/crypto/crypto.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
+import '../../state/accounts.dart';
 import '../../state/session.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
@@ -30,6 +31,17 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   bool _busy = false;
   String? _error;
   String? _vault;
+
+  /// Set when this is an extra account being added; lets the person go back.
+  AccountEntry? _back;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.read(sessionProvider.notifier).returnTarget().then((t) {
+      if (mounted && t != null) setState(() => _back = t);
+    });
+  }
 
   Future<void> _generate() async {
     setState(() => _busy = true);
@@ -148,6 +160,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: Text('Restore from recovery phrase', style: Txt.bodyStrong(p.muted)),
             ),
           ),
+          if (_back != null)
+            SizedBox(
+              width: double.infinity,
+              child: TextButton.icon(
+                onPressed: () => ref.read(sessionProvider.notifier).cancelAddAccount(_back!),
+                icon: const Icon(Icons.arrow_back_rounded, size: 18),
+                label: Text('Back to ${_back!.name.isEmpty ? 'your account' : _back!.name}'),
+              ),
+            ),
         ],
       ),
     );

@@ -26,6 +26,7 @@ import '../features/profile/edit_profile_screen.dart';
 import '../features/profile/insights_screen.dart';
 import '../features/profile/people_screen.dart';
 import '../features/profile/profile_screen.dart';
+import '../features/settings/accounts_screen.dart';
 import '../features/settings/backup_screen.dart';
 import '../features/settings/notifications_screen.dart';
 import '../features/settings/settings_screen.dart';
@@ -128,6 +129,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/s/:id/settings', builder: (_, s) => SpaceSettingsScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/connect', builder: (_, s) => ConnectScreen(scan: s.uri.queryParameters['scan'] == '1')),
+      GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),
       GoRoute(path: '/channels', builder: (_, _) => const ChannelsScreen()),
       GoRoute(path: '/notifications', builder: (_, _) => const NotificationsScreen()),
       GoRoute(path: '/data', builder: (_, _) => const DataExplorerScreen()),

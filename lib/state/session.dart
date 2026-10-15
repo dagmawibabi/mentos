@@ -12,6 +12,7 @@ import '../data/media_store.dart';
 import '../net/engine.dart';
 import '../net/transport.dart';
 import '../net/transport_factory.dart';
+import 'accounts.dart';
 import 'settings.dart';
 
 sealed class Session {
@@ -66,11 +67,88 @@ class SessionNotifier extends Notifier<Session> {
     }
   }
 
-  Future<String> _root() async {
+  /// The store root shared by every account on this device.
+  Future<String> _base() async {
     final dest = await _dataDir();
     await dest.create(recursive: true);
     await _migrateFrom(await _legacyDir(), dest);
     return dest.path;
+  }
+
+  Future<AccountRegistry> _registry() async => AccountRegistry(await _base());
+
+  /// The folder of the account that is open (or being created).
+  Future<String> _root() async {
+    final dir = (await _registry()).activeDir();
+    await Directory(dir).create(recursive: true);
+    return dir;
+  }
+
+  /// Accounts on this device, with the open one's name kept current.
+  Future<({List<AccountEntry> accounts, String active})> accounts() async {
+    final reg = await _registry();
+    final e = _engine;
+    if (e != null) reg.update(reg.load().active, id: e.me.id, name: e.myProfile.displayName);
+    return reg.load();
+  }
+
+  Future<void> _close() async {
+    final e = _engine;
+    _engine = null;
+    _keys = null;
+    if (e == null) return;
+    try {
+      final reg = await _registry();
+      reg.update(reg.load().active, id: e.me.id, name: e.myProfile.displayName);
+    } catch (_) {}
+    await e.stop();
+    e.db.close();
+  }
+
+  /// Closes this account and opens another one on this device.
+  Future<void> switchAccount(String dir) async {
+    state = const SessionLoading();
+    await _close();
+    (await _registry()).setActive(dir);
+    await _boot();
+  }
+
+  /// Closes this account and starts onboarding in a fresh, separate folder.
+  Future<void> addAccount() async {
+    state = const SessionLoading();
+    await _close();
+    (await _registry()).addNew();
+    state = const SessionSignedOut();
+  }
+
+  /// The account the onboarding screen can go back to instead of creating
+  /// one, when this is an added account that never got an identity.
+  Future<AccountEntry?> returnTarget() async {
+    final reg = await _registry();
+    final s = reg.load();
+    final active = s.accounts.firstWhere((a) => a.dir == s.active, orElse: () => AccountEntry(dir: s.active));
+    if (active.id.isNotEmpty || _engine != null) return null;
+    return reg.previousOf(s.active);
+  }
+
+  /// Abandons an unfinished new account and reopens [to].
+  Future<void> cancelAddAccount(AccountEntry to) async {
+    final reg = await _registry();
+    final abandoned = reg.load().active;
+    state = const SessionLoading();
+    reg.setActive(to.dir);
+    if (abandoned != '.') reg.remove(abandoned);
+    await _boot();
+  }
+
+  /// Erases another account on this device. The open one is erased with [wipe].
+  Future<void> removeAccount(String dir) async {
+    final reg = await _registry();
+    if (reg.load().active == dir) throw StateError('Switch away before removing this account.');
+    if (dir == '.') {
+      await _wipeFolder(Directory(reg.dirOf('.')), primary: true);
+    }
+    reg.remove(dir);
   }
 
   /// AppData on C: is often too small on this machine. Prefer MENTOS_HOME,
@@ -144,12 +222,25 @@ class SessionNotifier extends Notifier<Session> {
       engine.noteStartError('$e');
     }
     _engine = engine;
+    try {
+      final reg = await _registry();
+      reg.update(reg.load().active, id: me.id, name: engine.myProfile.displayName);
+    } catch (_) {}
     state = SessionReady(engine);
   }
 
   /// Creates or restores an identity and opens the app.
   Future<void> signIn(Identity me, {String? name}) async {
     try {
+      // The same recovery phrase twice on one device would run two copies of
+      // one node; open the existing account instead.
+      final reg = await _registry();
+      final current = reg.load();
+      final existing = current.accounts.where((a) => a.id == me.id && a.dir != current.active).firstOrNull;
+      if (existing != null) {
+        await cancelAddAccount(existing);
+        return;
+      }
       final keys = _keys ?? await KeyVault.open(await _root());
       _keys = keys;
       await keys.write('seed', toHex(me.seed));
@@ -264,20 +355,43 @@ class SessionNotifier extends Notifier<Session> {
     }
   }
 
-  /// Erases the identity and every byte this app stored.
+  /// Erases the open identity and every byte stored for it. Other accounts
+  /// on this device are left alone, and the most recent one opens next.
   /// Refuses to delete a directory that does not look like this app's store.
   Future<void> wipe() async {
+    state = const SessionLoading();
+    final keys = _keys;
     final e = _engine;
     _engine = null;
-    state = const SessionLoading();
+    _keys = null;
     if (e != null) {
       await e.stop();
       e.db.close();
     }
-    final root = Directory(await _root());
+    await keys?.deleteAll();
+    final reg = await _registry();
+    final active = reg.load().active;
+    final root = Directory(reg.dirOf(active));
+    await _wipeFolder(root, primary: active == '.');
+    final next = reg.previousOf(active);
+    reg.remove(active);
+    if (next != null) {
+      reg.setActive(next.dir);
+      await _boot();
+      return;
+    }
+    state = const SessionSignedOut();
+  }
+
+  /// Deletes one account's files. For the primary account only the known
+  /// file names are removed, since other accounts live inside its folder.
+  Future<void> _wipeFolder(Directory root, {required bool primary}) async {
     final owned = root.existsSync() && _ownedStore(root);
-    await _keys?.deleteAll();
-    _keys = null;
+    if (primary && root.existsSync()) {
+      try {
+        await (await KeyVault.open(root.path)).deleteAll();
+      } catch (_) {}
+    }
     if (root.existsSync() && owned) {
       const names = [
         'mentos.db',
@@ -300,7 +414,6 @@ class SessionNotifier extends Notifier<Session> {
         if (d.existsSync()) await d.delete(recursive: true);
       }
     }
-    state = const SessionSignedOut();
   }
 
   Future<void> _deleteDbFiles(String path) async {

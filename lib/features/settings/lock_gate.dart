@@ -1,10 +1,8 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:local_auth/local_auth.dart';
 
-import '../../core/crypto/crypto.dart';
+import '../../core/pin.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../state/providers.dart';
@@ -23,9 +21,14 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
   final _pin = TextEditingController();
   bool _locked = false;
   DateTime? _paused;
-  DateTime? _nextTry;
-  int _fails = 0;
+  bool _checking = false;
   String? _error;
+
+  static const _throttleKey = 'pinThrottle';
+
+  PinThrottle _throttle() => PinThrottle.decode(ref.read(maybeEngineProvider)?.db.getKv(_throttleKey));
+
+  void _saveThrottle(PinThrottle t) => ref.read(maybeEngineProvider)?.db.setKv(_throttleKey, t.encode());
 
   @override
   void initState() {
@@ -77,31 +80,50 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
         });
         _pin.clear();
       }
-    } catch (_) {}
+    } catch (e) {
+      // Shown instead of swallowed, so a misconfigured device is visible.
+      if (mounted) setState(() => _error = 'Biometrics unavailable: ${e.toString().split('\n').first}');
+    }
   }
 
-  void _unlock() {
-    final wait = _nextTry?.difference(DateTime.now());
-    if (wait != null && !wait.isNegative) {
-      setState(() => _error = 'Try again in ${wait.inSeconds + 1}s');
+  Future<void> _unlock() async {
+    if (_checking) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final t = _throttle();
+    final wait = t.waitAt(now);
+    if (wait > Duration.zero) {
+      setState(() => _error = 'Too many tries. Wait ${_human(wait)}.');
       return;
     }
     final s = ref.read(settingsProvider);
-    if (toHex(sha256(utf8.encode(_pin.text))) != s.lockHash) {
-      _fails += 1;
-      final seconds = 1 << _fails.clamp(0, 5);
-      _nextTry = DateTime.now().add(Duration(seconds: seconds));
-      setState(() => _error = 'Wrong PIN');
+    setState(() => _checking = true);
+    final ok = await PinHash.verify(_pin.text, s.lockHash);
+    if (!mounted) return;
+    setState(() => _checking = false);
+    if (!ok) {
+      final next = t.failed(now);
+      _saveThrottle(next);
+      final left = PinThrottle.free - next.fails;
+      setState(() => _error = left > 0
+          ? 'Wrong PIN. $left more ${left == 1 ? 'try' : 'tries'} before a wait.'
+          : 'Wrong PIN. Wait ${_human(next.waitAt(now))}.');
       return;
     }
-    _fails = 0;
-    _nextTry = null;
+    _saveThrottle(const PinThrottle());
+    if (PinHash.isLegacy(s.lockHash)) {
+      final upgraded = await PinHash.create(_pin.text);
+      ref.read(settingsProvider.notifier).update((x) => x.copyWith(lockHash: upgraded));
+    }
+    if (!mounted) return;
     setState(() {
       _locked = false;
       _error = null;
     });
     _pin.clear();
   }
+
+  static String _human(Duration d) =>
+      d.inMinutes >= 1 ? '${d.inMinutes}m ${d.inSeconds % 60}s' : '${d.inSeconds + 1}s';
 
   @override
   Widget build(BuildContext context) {
@@ -129,7 +151,7 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
                 decoration: InputDecoration(hintText: 'PIN', errorText: _error),
               ),
               const SizedBox(height: 16),
-              FilledButton(onPressed: _unlock, child: const Text('Unlock')),
+              FilledButton(onPressed: _checking ? null : _unlock, child: Text(_checking ? 'Checking…' : 'Unlock')),
               if (s.lockBio) ...[
                 const SizedBox(height: 8),
                 TextButton(onPressed: _bio, child: const Text('Use biometrics')),
@@ -142,4 +164,3 @@ class _LockGateState extends ConsumerState<LockGate> with WidgetsBindingObserver
   }
 }
 
-String pinHash(String pin) => toHex(sha256(utf8.encode(pin)));

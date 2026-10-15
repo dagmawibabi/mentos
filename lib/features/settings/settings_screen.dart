@@ -9,7 +9,7 @@ import '../../core/theme/tokens.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../widgets/ui.dart';
-import 'lock_gate.dart';
+import '../../core/pin.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -181,6 +181,12 @@ class SettingsScreen extends ConsumerWidget {
           RowTile(icon: Icons.block_rounded, title: 'Blocked people', onTap: () => context.push('/people?tab=3')),
           SectionLabel('Identity'),
           RowTile(
+            icon: Icons.switch_account_outlined,
+            title: 'Accounts',
+            subtitle: 'Add another identity or switch between them',
+            onTap: () => context.push('/accounts'),
+          ),
+          RowTile(
             icon: Icons.key_rounded,
             title: 'Recovery phrase',
             subtitle: 'Restores this identity and the chats and files saved with it',
@@ -294,13 +300,24 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (pin == null || (pin.isNotEmpty && pin.length < 4)) return;
+    if (pin == null) return;
     if (pin.isEmpty) {
       ref.read(settingsProvider.notifier).update((x) => x.copyWith(lockHash: '', lockBio: false));
       return;
     }
+    if (pin.length < 4 || !RegExp(r'^\d+$').hasMatch(pin)) {
+      if (context.mounted) toast(context, 'Use at least 4 digits');
+      return;
+    }
+    if (!context.mounted) return;
+    final again = await prompt(context, title: 'Repeat the PIN', action: 'Save', maxLength: 32);
+    if (again?.trim() != pin) {
+      if (context.mounted) toast(context, 'PINs did not match');
+      return;
+    }
+    final hash = await PinHash.create(pin);
     ref.read(settingsProvider.notifier).update((x) => x.copyWith(
-          lockHash: pin.isEmpty ? '' : pinHash(pin),
+          lockHash: hash,
           lockAfter: x.lockAfter == 0 ? 60 : x.lockAfter,
         ));
   }
