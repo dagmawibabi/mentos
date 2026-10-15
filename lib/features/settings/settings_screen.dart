@@ -112,12 +112,11 @@ class SettingsScreen extends ConsumerWidget {
             value: s.hideStrangers,
             onChanged: (v) => n.update((x) => x.copyWith(hideStrangers: v)),
           ),
-          SwitchTile(
+          RowTile(
             icon: Icons.notifications_outlined,
-            title: 'Banner when a file arrives',
-            subtitle: 'Nothing else interrupts the screen. Muted chats stay quiet.',
-            value: s.systemNotify,
-            onChanged: (v) => n.update((x) => x.copyWith(systemNotify: v)),
+            title: 'Notifications',
+            subtitle: s.systemNotify ? 'Messages, mentions, invites and more' : 'Off',
+            onTap: () => context.push('/notifications'),
           ),
           SwitchTile(
             icon: Icons.visibility_off_outlined,

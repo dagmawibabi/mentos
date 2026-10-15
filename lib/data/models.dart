@@ -918,3 +918,28 @@ String alias(String id) {
 }
 
 String shortId(String id) => id.length > 12 ? '${id.substring(0, 6)}…${id.substring(id.length - 4)}' : id;
+
+/// Something that may become an operating-system notification.
+class OsNote {
+  const OsNote({
+    required this.id,
+    required this.category,
+    required this.title,
+    required this.body,
+    required this.at,
+    this.route,
+    this.scope,
+  });
+
+  final String id;
+
+  /// dm | group | mention | reply | like | follow | invite | xfer | story | channel | other
+  final String category;
+  final String title;
+  final String body;
+
+  /// When the underlying event happened, ms since epoch.
+  final int at;
+  final String? route;
+  final String? scope;
+}

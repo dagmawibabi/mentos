@@ -86,6 +86,11 @@ class Engine {
   final _peerBps = <String, int>{};
 
   final _changes = StreamController<Set<String>>.broadcast();
+  final _notes = StreamController<OsNote>.broadcast();
+
+  /// Everything that may deserve an operating-system notification. The
+  /// listener decides, using the person's notification settings.
+  Stream<OsNote> get notes => _notes.stream;
   final _pending = <String>{};
   Timer? _flush;
   final _subs = <StreamSubscription>[];
@@ -1658,14 +1663,53 @@ class Engine {
           _setTyping(e.scope, e.author, false);
         }
         if (e.author != me.id) {
+          final text = (e.body['text'] as String?)?.trim() ?? '';
+          final gid = type == 'gdm' ? Scope.parts(e.scope).elementAtOrNull(1) : null;
+          final group = gid == null ? null : db.group(gid);
           _notify(
+            at: e.ts,
             id: 'msg:${e.id}',
-            title: nameOf(e.author),
-            body: (e.body['text'] as String?)?.trim().isNotEmpty == true
-                ? e.body['text'] as String
-                : 'New message',
-            route: type == 'dm' ? '/chat/${e.author}' : '/chats',
+            title: group == null ? nameOf(e.author) : '${nameOf(e.author)} · ${group.name}',
+            body: text.isNotEmpty ? text : 'New message',
+            route: type == 'dm' ? '/chat/${e.author}' : (gid != null ? '/g/$gid' : '/chats'),
             scope: e.scope,
+            category: type == 'dm' ? 'dm' : (mentionsMe(text) ? 'mention' : 'group'),
+          );
+        }
+      case K.story:
+        if (e.author != me.id && (db.peer(e.author)?.iFollow ?? false)) {
+          _notify(
+            at: e.ts,
+            id: 'story:${e.id}',
+            title: nameOf(e.author),
+            body: 'Posted a story',
+            route: '/story/${e.author}',
+            category: 'story',
+          );
+        }
+      case K.post:
+        final owner = Scope.bcastOwner(e.scope);
+        final text = (e.body['text'] as String?)?.trim() ?? '';
+        if (e.author != me.id && owner != null) {
+          final chan = Scope.parts(e.scope).elementAtOrNull(2) ?? '';
+          _notify(
+            at: e.ts,
+            id: 'chan:${e.id}',
+            title: nameOf(e.author),
+            body: text.isNotEmpty ? text : 'New post in a channel',
+            route: '/ch/$owner/$chan',
+            scope: e.scope,
+            category: 'channel',
+          );
+        } else if (e.author != me.id && mentionsMe(text)) {
+          _notify(
+            at: e.ts,
+            id: 'mention:${e.id}',
+            title: nameOf(e.author),
+            body: text,
+            route: '/post/${e.id}',
+            scope: e.scope,
+            category: 'mention',
           );
         }
       case K.comment:
@@ -1682,6 +1726,7 @@ class Engine {
             ),
           );
           _notify(
+            at: e.ts,
             id: 'act:${e.id}',
             title: nameOf(e.author),
             body: (e.body['text'] as String?)?.trim().isNotEmpty == true
@@ -1689,6 +1734,7 @@ class Engine {
                 : 'Replied to your post',
             route: '/activity',
             scope: e.scope,
+            category: 'reply',
           );
           _emit({Ch.activity});
         }
@@ -1708,6 +1754,7 @@ class Engine {
               ),
             );
             _notify(
+              at: e.ts,
               id: 'like:${e.author}:$target',
               title: nameOf(e.author),
               body: 'Liked your post',
@@ -3536,7 +3583,18 @@ class Engine {
     String? scope,
     double? progress,
     String? cancelId,
+    String? category,
+    int? at,
   }) {
+    _notes.add(OsNote(
+      id: id,
+      at: at ?? nowMs(),
+      category: category ?? _categoryOf(id, kind),
+      title: title,
+      body: body,
+      route: route,
+      scope: scope,
+    ));
     if (kind != 'xfer') return;
     if (!_settings.systemNotify) return;
     if (scope != null && db.chat(scope)['muted'] == 1) return;
@@ -3555,6 +3613,27 @@ class Engine {
       cancelId: cancelId,
     );
     _emit({Ch.alerts});
+  }
+
+  static String _categoryOf(String id, String kind) {
+    if (kind == 'xfer' || kind == 'invite') return kind;
+    final prefix = id.split(':').first;
+    return switch (prefix) {
+      'follow' => 'follow',
+      'like' => 'like',
+      'act' => 'reply',
+      'sync' => 'invite',
+      'ginvite' => 'invite',
+      _ => 'other',
+    };
+  }
+
+  /// True when [text] names this person with an @, by display name or alias.
+  bool mentionsMe(String text) {
+    if (!text.contains('@')) return false;
+    final lower = text.toLowerCase();
+    final names = {myProfile.name.trim().toLowerCase(), alias(me.id)}..remove('');
+    return names.any((n) => lower.contains('@$n') || lower.contains('@${n.replaceAll(' ', '')}'));
   }
 
   int peerBps(String id) => _peerBps[id] ?? 0;
