@@ -18,13 +18,14 @@ use std::{
 
 #[cfg(target_os = "android")]
 mod android;
+mod diag;
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
 use bytes::Bytes;
 use iroh::{
-    endpoint::{presets, Connection, RecvStream, SendStream},
+    endpoint::{Connection, RecvStream, SendStream},
     protocol::{AcceptError, ProtocolHandler, Router},
     Endpoint, EndpointAddr, EndpointId, PublicKey, SecretKey, Watcher,
 };
@@ -648,7 +649,7 @@ async fn start_node(secret: [u8; 32], blob_dir: PathBuf) -> Result<Arc<Node>> {
     let sk = SecretKey::from_bytes(&secret);
     let events: EventQ = Arc::new(Mutex::new(VecDeque::new()));
 
-    let endpoint = Endpoint::builder(presets::N0)
+    let endpoint = diag::builder()?
         .secret_key(sk)
         .alpns(vec![DIRECT_ALPN.to_vec(), BLOB_ALPN.to_vec(), iroh_gossip::ALPN.to_vec()])
         .bind()
@@ -1338,4 +1339,24 @@ pub extern "C" fn mentos_free(p: *mut c_char) {
             unsafe { drop(CString::from_raw(p)) };
         }
     })
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_set_options(json: *const c_char) -> i32 {
+    guard(-1, || diag::set_options_inner(json))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_diagnostics() -> *mut c_char {
+    guard(std::ptr::null_mut(), diag::diagnostics_inner)
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_ping(peer: *const c_char) -> i64 {
+    guard(-1, || diag::ping_inner(peer))
+}
+
+#[no_mangle]
+pub extern "C" fn mentos_network_change() -> i32 {
+    guard(-1, diag::network_change_inner)
 }
