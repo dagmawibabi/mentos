@@ -13,6 +13,8 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   final _events = StreamController<NetEvent>.broadcast();
   Timer? _poll;
   String _blobDir = '';
+  final _connected = <String>{};
+  Future<Map<String, dynamic>?>? _diagnosing;
 
   static IrohTransport? tryOpen() {
     try {
@@ -50,7 +52,10 @@ class IrohTransport implements Transport, NetTools, MediaLink {
       switch (m['t']) {
         case 'direct':
           final from = m['from'] as String?;
-          if (from != null) _events.add(DirectEvent(from, _bytes(m['data'])));
+          if (from != null) {
+            _connected.add(from);
+            _events.add(DirectEvent(from, _bytes(m['data'])));
+          }
         case 'gossip':
           final topic = m['topic'] as String?;
           final from = m['from'] as String?;
@@ -59,7 +64,14 @@ class IrohTransport implements Transport, NetTools, MediaLink {
           }
         case 'link':
           final peer = m['peer'] as String?;
-          if (peer != null) _events.add(LinkEvent(peer, m['up'] == true));
+          if (peer != null) {
+            if (m['up'] == true) {
+              _connected.add(peer);
+            } else {
+              _connected.remove(peer);
+            }
+            _events.add(LinkEvent(peer, m['up'] == true));
+          }
         case 'neighbor':
           final topic = m['topic'] as String?;
           final peer = m['peer'] as String?;
@@ -71,7 +83,8 @@ class IrohTransport implements Transport, NetTools, MediaLink {
         case 'call':
           final call = m['id'] as String?;
           final peer = m['peer'] as String?;
-          if (call != null && peer != null) _events.add(MediaEvent(call, peer, m['up'] == true));
+          if (call != null && peer != null)
+            _events.add(MediaEvent(call, peer, m['up'] == true));
       }
     }
   }
@@ -104,6 +117,7 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   @override
   Future<void> stop() async {
     _poll?.cancel();
+    _connected.clear();
     try {
       _n.stop();
     } catch (_) {}
@@ -111,7 +125,12 @@ class IrohTransport implements Transport, NetTools, MediaLink {
 
   @override
   Future<bool> send(String peer, Uint8List data) async {
-    final ok = await _call('send', _dial(peer), data);
+    // Unreachable followers must not occupy the workers used by live chats
+    // and receipts. Keep the worker count bounded even with many followers.
+    final lane = _connected.contains(peer.split('|').first)
+        ? _liveLanes.reduce((a, b) => a.pending <= b.pending ? a : b)
+        : _dialLane;
+    final ok = await _call('send', _dial(peer), data, lane: lane);
     return ok == true;
   }
 
@@ -166,7 +185,13 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   Future<String> importBlob(String path) async {
     // Hashing a large video on the UI isolate froze the app long enough for
     // Android to report it as not responding.
-    final out = await _call('import', path, null, lane: _fileLane, timeout: const Duration(minutes: 5));
+    final out = await _call(
+      'import',
+      path,
+      null,
+      lane: _fileLane,
+      timeout: const Duration(minutes: 5),
+    );
     if (out is String && out.isNotEmpty) return out;
     throw StateError(out is _Failure ? out.message : 'import failed');
   }
@@ -181,7 +206,13 @@ class IrohTransport implements Transport, NetTools, MediaLink {
     // separate FFI call on this isolate so it is not stuck behind the fetch.
     // The native deadline grows with the file size (80 MiB over a slow relay
     // takes minutes); this only catches a lane that stopped answering.
-    final ok = await _call('fetch', hash, peer, lane: _blobLane, timeout: const Duration(minutes: 25));
+    final ok = await _call(
+      'fetch',
+      hash,
+      peer,
+      lane: _blobLane,
+      timeout: const Duration(minutes: 25),
+    );
     return ok == true;
   }
 
@@ -194,14 +225,30 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   }
 
   @override
-  Future<Map<String, dynamic>?> diagnostics() async {
-    final out = await _call('diag', null, null, lane: _diagLane, timeout: const Duration(seconds: 20));
-    return out is Map ? out.cast<String, dynamic>() : null;
+  Future<Map<String, dynamic>?> diagnostics() {
+    // Refresh and multiple screens share the current measurement instead of
+    // building an unbounded queue on the diagnostics worker.
+    return _diagnosing ??= (() async {
+      final out = await _call(
+        'diag',
+        null,
+        null,
+        lane: _diagLane,
+        timeout: const Duration(seconds: 12),
+      );
+      return out is Map ? out.cast<String, dynamic>() : null;
+    })().whenComplete(() => _diagnosing = null);
   }
 
   @override
   Future<double?> ping(String peer) async {
-    final out = await _call('ping', peer, null, lane: _diagLane, timeout: const Duration(seconds: 25));
+    final out = await _call(
+      'ping',
+      peer,
+      null,
+      lane: _pingLane,
+      timeout: const Duration(seconds: 25),
+    );
     return out is int && out >= 0 ? out / 1000 : null;
   }
 
@@ -217,7 +264,8 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   bool get supportsCalls => _n.hasCalls;
 
   @override
-  bool callListen(String call, List<String> peers) => _n.callListen(call, peers);
+  bool callListen(String call, List<String> peers) =>
+      _n.callListen(call, peers);
   @override
   bool callDial(String call, String peer) => _n.callDial(call, peer);
   @override
@@ -244,9 +292,12 @@ class IrohTransport implements Transport, NetTools, MediaLink {
   // its worker for minutes, so fetches and imports get their own lanes and
   // never delay messages.
   final _msgLane = _Lane();
+  final _dialLane = _Lane();
+  final _liveLanes = List.generate(4, (_) => _Lane());
   final _blobLane = _Lane();
   final _fileLane = _Lane();
   final _diagLane = _Lane();
+  final _pingLane = _Lane();
 
   Future<Object?> _call(
     String op,
@@ -254,17 +305,23 @@ class IrohTransport implements Transport, NetTools, MediaLink {
     Object? b, {
     _Lane? lane,
     Duration timeout = const Duration(seconds: 50),
-  }) async {
-    final reply = ReceivePort();
-    try {
-      final port = await (lane ?? _msgLane).port().timeout(const Duration(seconds: 10));
-      port.send([op, a, b, reply.sendPort]);
-      return await reply.first.timeout(timeout, onTimeout: () => false);
-    } catch (_) {
-      return false;
-    } finally {
-      reply.close();
-    }
+  }) {
+    final selected = lane ?? _msgLane;
+    // The worker runs one FFI call at a time. Starting the timeout while this
+    // call is still queued behind hello/outbox/other messages made it look
+    // like the send failed, so the chat stayed on "Waiting to send".
+    return selected.run(() async {
+      final reply = ReceivePort();
+      try {
+        final port = await selected.port().timeout(const Duration(seconds: 10));
+        port.send([op, a, b, reply.sendPort]);
+        return await reply.first.timeout(timeout, onTimeout: () => false);
+      } catch (_) {
+        return false;
+      } finally {
+        reply.close();
+      }
+    });
   }
 
   @override
@@ -280,11 +337,17 @@ class IrohTransport implements Transport, NetTools, MediaLink {
 
   @override
   Future<NetStatus> status() async {
+    Map<String, dynamic> m;
     try {
-      final m = _n.status();
-      if (m.isEmpty) {
-        return NetStatus(nodeId: '', running: false, engine: 'iroh');
-      }
+      m = _n.status();
+    } catch (_) {
+      return const NetStatus(nodeId: '', running: false, engine: 'iroh');
+    }
+    if (m.isEmpty) {
+      return const NetStatus(nodeId: '', running: false, engine: 'iroh');
+    }
+    final running = m['running'] == true;
+    try {
       final links = <LinkInfo>[];
       for (final l in (m['links'] as List?) ?? const []) {
         if (l is! Map) continue;
@@ -326,9 +389,12 @@ class IrohTransport implements Transport, NetTools, MediaLink {
           .where((s) => s.isNotEmpty)
           .toList();
       final home = m['relayUrl'] as String?;
+      _connected
+        ..clear()
+        ..addAll(links.map((l) => l.peer));
       return NetStatus(
         nodeId: m['nodeId'] as String? ?? '',
-        running: m['running'] == true,
+        running: running,
         relayUrl: home ?? (relays.isEmpty ? null : relays.first),
         directAddrs: ((m['directAddrs'] as List?) ?? const [])
             .map((e) => e.toString())
@@ -340,7 +406,11 @@ class IrohTransport implements Transport, NetTools, MediaLink {
         routeTelemetry: m['routeTelemetry'] == 1,
       );
     } catch (_) {
-      return const NetStatus(nodeId: '', running: false, engine: 'iroh');
+      return NetStatus(
+        nodeId: m['nodeId'] as String? ?? '',
+        running: running,
+        engine: 'iroh',
+      );
     }
   }
 }
@@ -351,8 +421,29 @@ class _Failure {
 }
 
 class _Lane {
+  int pending = 0;
   SendPort? _worker;
   Future<SendPort>? _starting;
+  Future<void> _tail = Future<void>.value();
+
+  /// Runs [body] only after the previous call on this lane has finished.
+  Future<T> run<T>(Future<T> Function() body) {
+    pending++;
+    final previous = _tail;
+    final done = Completer<void>();
+    _tail = done.future;
+    return () async {
+      try {
+        await previous;
+      } catch (_) {}
+      try {
+        return await body();
+      } finally {
+        pending--;
+        if (!done.isCompleted) done.complete();
+      }
+    }();
+  }
 
   Future<SendPort> port() {
     final existing = _worker;
@@ -369,7 +460,8 @@ class _Lane {
           _starting = null;
           exit.close();
         });
-        final port = await ready.first.timeout(const Duration(seconds: 10)) as SendPort;
+        final port =
+            await ready.first.timeout(const Duration(seconds: 10)) as SendPort;
         _worker = port;
         return port;
       } catch (_) {
@@ -393,26 +485,35 @@ void _nativeIo(SendPort parent) {
     try {
       switch (msg[0]) {
         case 'send':
-          reply.send(n.send(msg[1] as String, msg[2] as Uint8List));
+          _reply(reply, n.send(msg[1] as String, msg[2] as Uint8List));
         case 'broadcast':
-          reply.send(n.broadcast(msg[1] as String, msg[2] as Uint8List));
+          _reply(reply, n.broadcast(msg[1] as String, msg[2] as Uint8List));
         case 'fetch':
-          reply.send(n.fetchBlob(msg[1] as String, msg[2] as String));
+          _reply(reply, n.fetchBlob(msg[1] as String, msg[2] as String));
         case 'import':
           try {
-            reply.send(n.importBlob(msg[1] as String));
+            _reply(reply, n.importBlob(msg[1] as String));
           } catch (e) {
-            reply.send(_Failure(e is StateError ? e.message : '$e'));
+            _reply(reply, _Failure(e is StateError ? e.message : '$e'));
           }
         case 'diag':
-          reply.send(n.diagnostics());
+          _reply(reply, n.diagnostics());
         case 'ping':
-          reply.send(n.ping(msg[1] as String));
+          _reply(reply, n.ping(msg[1] as String));
         default:
-          reply.send(false);
+          _reply(reply, false);
       }
     } catch (_) {
-      reply.send(false);
+      _reply(reply, false);
     }
   });
+}
+
+void _reply(SendPort reply, Object? value) {
+  try {
+    reply.send(value);
+  } catch (_) {
+    // The caller already gave up. A throw here used to cancel the worker
+    // listener, and every message after that stayed queued.
+  }
 }

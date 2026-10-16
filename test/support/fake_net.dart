@@ -37,6 +37,7 @@ class TestNetwork {
   /// topic -> node ids that joined it, for in-process gossip.
   final topics = <String, Set<String>>{};
   Completer<bool>? sendGate;
+  final sendGates = <String, Completer<bool>>{};
 }
 
 class TestTransport implements Transport, MediaLink {
@@ -79,6 +80,10 @@ class TestTransport implements Transport, MediaLink {
       return false;
     }
     network.messages.add((from: id, to: peer, body: body));
+    final peerGate = network.sendGates[peer];
+    if (body['t'] == 'item' && peerGate != null) {
+      if (!await peerGate.future) return false;
+    }
     if (body['t'] == 'item' &&
         Envelope.fromWire(body['e'])?.kind == K.msg &&
         network.sendGate != null) {

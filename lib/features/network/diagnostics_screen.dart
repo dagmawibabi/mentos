@@ -58,7 +58,7 @@ class DiagnosticsScreen extends ConsumerWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(Space.xl),
                         child: Text(
-                          status?.running == true ? 'Measuring…' : 'The node is not running. Connect it from the Network tab.',
+                          _measuringText(loading: async.isLoading, running: status?.running == true),
                           style: Txt.small(p.muted),
                           textAlign: TextAlign.center,
                         ),
@@ -104,6 +104,12 @@ class DiagnosticsScreen extends ConsumerWidget {
                     ),
     );
   }
+}
+
+String _measuringText({required bool loading, required bool running}) {
+  if (!running) return 'The node is not running. Connect it from the Network tab.';
+  if (loading) return 'Measuring…';
+  return 'The measurement did not finish. Tap refresh to try again.';
 }
 
 String _privacyLabel(String p) => switch (p) {

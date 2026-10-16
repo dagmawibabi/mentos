@@ -4,7 +4,9 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+
 import 'support/fake_net.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mentos/core/theme/app_theme.dart';
@@ -53,6 +55,9 @@ void main() {
     engines = [];
   });
   tearDown(() async {
+    for (final gate in network.sendGates.values) {
+      if (!gate.isCompleted) gate.complete(false);
+    }
     network.sendGate?.complete(false);
     for (final engine in engines) {
       await engine.stop();
@@ -466,4 +471,83 @@ void main() {
       );
     },
   );
+
+  test(
+    'a connected peer is sent while offline followers stay queued',
+    () async {
+      final a = await node();
+      final b = await node();
+      (a.net as TestTransport).controller.add(LinkEvent(b.me.id, true));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      final parked = <String>[];
+      for (var i = 0; i < 40; i++) {
+        final peer = await Identity.generate();
+        final env = await Envelope.create(
+          a.me,
+          kind: K.msg,
+          scope: Scope.dm(a.me.id, peer.id),
+          body: {'text': 'parked $i'},
+        );
+        a.db.queueMessage(env, [peer.id]);
+        parked.add(env.id);
+      }
+      final scope = Scope.dm(a.me.id, b.me.id);
+      final msg = await a.sendMessage(scope, text: 'live');
+      await eventually(
+        () => a.db.deliveries(msg.id).single.state == Delivery.delivered,
+      );
+      expect(b.messages(scope).map((m) => m.item.id), contains(msg.id));
+      for (final id in parked) {
+        final job = a.db.deliveries(id).single;
+        expect(job.state, Delivery.queued);
+        expect(job.attempts, 0);
+      }
+    },
+  );
+
+  test(
+    'a stalled recipient does not block a newly connected recipient',
+    () async {
+      final a = await node();
+      final b = await node();
+      final c = await node();
+      final gate = Completer<bool>();
+      network.sendGates[b.me.id] = gate;
+      final blocked = await a.sendMessage(
+        Scope.dm(a.me.id, b.me.id),
+        text: 'blocked',
+      );
+      await eventually(
+        () => a.db.deliveries(blocked.id).single.state == Delivery.sending,
+      );
+      (a.net as TestTransport).controller.add(LinkEvent(c.me.id, true));
+      final live = await a.sendMessage(
+        Scope.dm(a.me.id, c.me.id),
+        text: 'live',
+      );
+      await eventually(
+        () => a.db.deliveries(live.id).single.state == Delivery.delivered,
+      );
+      expect(gate.isCompleted, isFalse);
+      gate.complete(true);
+      await a.flushDeliveries();
+    },
+  );
+
+  test('a message queued during a send wakes the same recipient', () async {
+    final a = await node();
+    final b = await node();
+    final scope = Scope.dm(a.me.id, b.me.id);
+    final gate = Completer<bool>();
+    network.sendGates[b.me.id] = gate;
+    final first = await a.sendMessage(scope, text: 'first');
+    await eventually(() => a.db.deliveries(first.id).single.state == Delivery.sending);
+    final second = await a.sendMessage(scope, text: 'second');
+    final flushed = a.flushDeliveries();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    gate.complete(true);
+    await flushed;
+    await eventually(() => a.db.deliveries(second.id).single.state == Delivery.delivered);
+    expect(b.messages(scope), hasLength(2));
+  });
 }

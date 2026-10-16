@@ -103,6 +103,50 @@ fn ms(d: Duration) -> f64 {
     (d.as_secs_f64() * 1000.0 * 10.0).round() / 10.0
 }
 
+/// `Path::stats` panics once the path's connection handle is gone.
+fn path_json(p: iroh::endpoint::Path<'_>) -> Option<serde_json::Value> {
+    let (kind, address) = addr_json(p.remote_addr())?;
+    let selected = p.is_selected();
+    let measured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ps = p.stats();
+        (
+            ms(ps.rtt),
+            ps.cwnd,
+            ps.udp_tx.bytes,
+            ps.udp_rx.bytes,
+            ps.lost_packets,
+            ps.congestion_events,
+        )
+    }));
+    let (rtt_ms, cwnd, tx, rx, lost, events) = measured.unwrap_or((0.0, 0, 0, 0, 0, 0));
+    Some(serde_json::json!({
+        "kind": kind,
+        "address": address,
+        "selected": selected,
+        "rttMs": rtt_ms,
+        "cwnd": cwnd,
+        "txBytes": tx,
+        "rxBytes": rx,
+        "lostPackets": lost,
+        "congestionEvents": events,
+    }))
+}
+
+fn conn_stats(conn: &iroh::endpoint::Connection) -> Option<(u64, u64, u64, u64, u64, u64)> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let s = conn.stats();
+        (
+            s.udp_tx.bytes,
+            s.udp_rx.bytes,
+            s.udp_tx.datagrams,
+            s.udp_rx.datagrams,
+            s.lost_packets,
+            s.lost_bytes,
+        )
+    }))
+    .ok()
+}
+
 fn addr_json(a: &TransportAddr) -> Option<(&'static str, String)> {
     match a {
         TransportAddr::Relay(url) => Some(("relay", url.to_string())),
@@ -120,109 +164,7 @@ pub(crate) fn diagnostics_inner() -> *mut c_char {
         }
     };
     let opts = options();
-    let built = wait(async move {
-        let ep = &n.endpoint;
-        let report = ep.net_report().get();
-        let net = report.map(|r| {
-            let latencies: Vec<serde_json::Value> = r
-                .relay_latency
-                .iter()
-                .map(|(probe, url, d)| {
-                    serde_json::json!({"relay": url.to_string(), "probe": probe_name(probe), "ms": ms(d)})
-                })
-                .collect();
-            serde_json::json!({
-                "udpV4": r.udp_v4,
-                "udpV6": r.udp_v6,
-                "mappingVariesV4": r.mapping_varies_by_dest_ipv4,
-                "mappingVariesV6": r.mapping_varies_by_dest_ipv6,
-                "preferredRelay": r.preferred_relay.as_ref().map(|u| u.to_string()),
-                "globalV4": r.global_v4.map(|a| a.to_string()),
-                "globalV6": r.global_v6.map(|a| a.to_string()),
-                "captivePortal": r.captive_portal,
-                "latencies": latencies,
-            })
-        });
-        let relays: Vec<serde_json::Value> = ep
-            .home_relay_status()
-            .get()
-            .iter()
-            .map(|s| {
-                serde_json::json!({
-                    "url": s.url().to_string(),
-                    "connected": s.is_connected(),
-                    "error": s.last_error().map(|e| e.to_string()),
-                })
-            })
-            .collect();
-        let bound: Vec<String> = ep.bound_sockets().iter().map(|s| s.to_string()).collect();
-
-        let conns: Vec<(iroh::EndpointId, iroh::endpoint::Connection)> = mutex(&n.conns)
-            .iter()
-            .flat_map(|(id, list)| {
-                list.iter()
-                    .filter(|(_, c)| c.close_reason().is_none())
-                    .map(move |(_, c)| (*id, c.clone()))
-            })
-            .collect();
-        let mut peers = Vec::new();
-        for (id, conn) in conns {
-            let s = conn.stats();
-            let paths: Vec<serde_json::Value> = conn
-                .paths()
-                .iter()
-                .filter_map(|p| {
-                    let (kind, address) = addr_json(&p.remote_addr())?;
-                    let ps = p.stats();
-                    Some(serde_json::json!({
-                        "kind": kind,
-                        "address": address,
-                        "selected": p.is_selected(),
-                        "rttMs": ms(p.rtt()),
-                        "cwnd": ps.cwnd,
-                        "txBytes": ps.udp_tx.bytes,
-                        "rxBytes": ps.udp_rx.bytes,
-                        "lostPackets": ps.lost_packets,
-                        "congestionEvents": ps.congestion_events,
-                    }))
-                })
-                .collect();
-            let known: Vec<serde_json::Value> = match ep.remote_info(id).await {
-                Some(info) => info
-                    .addrs()
-                    .filter_map(|a| {
-                        let (kind, address) = addr_json(a.addr())?;
-                        let active = matches!(a.usage(), iroh::endpoint::TransportAddrUsage::Active);
-                        Some(serde_json::json!({"kind": kind, "address": address, "active": active}))
-                    })
-                    .collect(),
-                None => Vec::new(),
-            };
-            peers.push(serde_json::json!({
-                "peer": hex_id(id),
-                "alpn": String::from_utf8_lossy(conn.alpn()).to_string(),
-                "side": format!("{:?}", conn.side()).to_lowercase(),
-                "txBytes": s.udp_tx.bytes,
-                "rxBytes": s.udp_rx.bytes,
-                "txDatagrams": s.udp_tx.datagrams,
-                "rxDatagrams": s.udp_rx.datagrams,
-                "lostPackets": s.lost_packets,
-                "lostBytes": s.lost_bytes,
-                "paths": paths,
-                "knownAddrs": known,
-            }));
-        }
-        serde_json::json!({
-            "nodeId": hex_id(ep.id()),
-            "privacy": privacy_name(&opts.privacy),
-            "proxy": opts.proxy,
-            "net": net,
-            "relays": relays,
-            "bound": bound,
-            "connections": peers,
-            "topics": mutex(&n.topics).len(),
-        })
-    });
+    let built = wait(async move { snapshot(&n, opts).await });
     match built {
         Ok(v) => heap_str(v.to_string()),
         Err(e) => {
@@ -230,6 +172,108 @@ pub(crate) fn diagnostics_inner() -> *mut c_char {
             std::ptr::null_mut()
         }
     }
+}
+
+pub(crate) async fn snapshot(n: &crate::Node, opts: Options) -> serde_json::Value {
+    let ep = &n.endpoint;
+    let report = ep.net_report().get();
+    let net = report.map(|r| {
+        let latencies: Vec<serde_json::Value> = r
+            .relay_latency
+            .iter()
+            .map(|(probe, url, d)| {
+                serde_json::json!({"relay": url.to_string(), "probe": probe_name(probe), "ms": ms(d)})
+            })
+            .collect();
+        serde_json::json!({
+            "udpV4": r.udp_v4,
+            "udpV6": r.udp_v6,
+            "mappingVariesV4": r.mapping_varies_by_dest_ipv4,
+            "mappingVariesV6": r.mapping_varies_by_dest_ipv6,
+            "preferredRelay": r.preferred_relay.as_ref().map(|u| u.to_string()),
+            "globalV4": r.global_v4.map(|a| a.to_string()),
+            "globalV6": r.global_v6.map(|a| a.to_string()),
+            "captivePortal": r.captive_portal,
+            "latencies": latencies,
+        })
+    });
+    let relays: Vec<serde_json::Value> = ep
+        .home_relay_status()
+        .get()
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "url": s.url().to_string(),
+                "connected": s.is_connected(),
+                "error": s.last_error().map(|e| e.to_string()),
+            })
+        })
+        .collect();
+    let bound: Vec<String> = ep.bound_sockets().iter().map(|s| s.to_string()).collect();
+
+    let conns: Vec<(iroh::EndpointId, iroh::endpoint::Connection)> = mutex(&n.conns)
+        .iter()
+        .flat_map(|(id, list)| {
+            list.iter()
+                .filter(|(_, c)| c.close_reason().is_none())
+                .map(move |(_, c)| (*id, c.clone()))
+        })
+        .collect();
+    let mut peers = Vec::new();
+    // Several followers mean dozens of paths, and a path that just closed
+    // panics inside `Path::stats`. That used to throw away the whole
+    // report, which the screen shows as "Measuring…" forever.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    for (id, conn) in conns {
+        if tokio::time::Instant::now() > deadline {
+            break;
+        }
+        let Some((tx_bytes, rx_bytes, tx_dgrams, rx_dgrams, lost_packets, lost_bytes)) =
+            conn_stats(&conn)
+        else {
+            continue;
+        };
+        let paths: Vec<serde_json::Value> = conn
+            .paths()
+            .iter()
+            .filter_map(path_json)
+            .collect();
+        let known: Vec<serde_json::Value> =
+            match tokio::time::timeout(Duration::from_millis(300), ep.remote_info(id)).await {
+                Ok(Some(info)) => info
+                    .addrs()
+                    .filter_map(|a| {
+                        let (kind, address) = addr_json(a.addr())?;
+                        let active = matches!(a.usage(), iroh::endpoint::TransportAddrUsage::Active);
+                        Some(serde_json::json!({"kind": kind, "address": address, "active": active}))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+        peers.push(serde_json::json!({
+            "peer": hex_id(id),
+            "alpn": String::from_utf8_lossy(conn.alpn()).to_string(),
+            "side": format!("{:?}", conn.side()).to_lowercase(),
+            "txBytes": tx_bytes,
+            "rxBytes": rx_bytes,
+            "txDatagrams": tx_dgrams,
+            "rxDatagrams": rx_dgrams,
+            "lostPackets": lost_packets,
+            "lostBytes": lost_bytes,
+            "paths": paths,
+            "knownAddrs": known,
+        }));
+    }
+    serde_json::json!({
+        "nodeId": hex_id(ep.id()),
+        "privacy": privacy_name(&opts.privacy),
+        "proxy": opts.proxy,
+        "net": net,
+        "relays": relays,
+        "bound": bound,
+        "connections": peers,
+        "topics": mutex(&n.topics).len(),
+    })
 }
 
 /// Dials [peer] if needed and returns the selected path's round trip in
@@ -256,11 +300,12 @@ pub(crate) fn ping_inner(peer: *const c_char) -> i64 {
         // A fresh connection's RTT estimate settles after a few packets.
         tokio::time::sleep(Duration::from_millis(250)).await;
         let paths = conn.paths();
-        let rtt = paths
-            .iter()
-            .find(|p| p.is_selected())
-            .map(|p| p.rtt())
-            .ok_or_else(|| anyhow!("no selected path"))?;
+        let rtt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            paths.iter().find(|p| p.is_selected()).map(|p| p.rtt())
+        }))
+        .ok()
+        .flatten()
+        .ok_or_else(|| anyhow!("no selected path"))?;
         Ok::<i64, anyhow::Error>(rtt.as_micros() as i64)
     });
     match r {

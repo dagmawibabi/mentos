@@ -245,9 +245,18 @@ impl Node {
         push_event(&self.events, v);
     }
 
+    /// Merges into any address already learned for this peer. A send that only
+    /// knows a relay must not wipe the direct path learned from an inbound link;
+    /// that path is often the only one that can carry a reply.
     fn remember(&self, addr: EndpointAddr) {
         if let Ok(mut t) = self.tickets.lock() {
-            t.insert(addr.id, addr);
+            t.entry(addr.id)
+                .and_modify(|old| {
+                    for a in &addr.addrs {
+                        old.addrs.insert(a.clone());
+                    }
+                })
+                .or_insert(addr);
         }
     }
 
@@ -259,11 +268,15 @@ impl Node {
             .unwrap_or_else(|| EndpointAddr::from(id))
     }
 
+    /// Newest first. The connection that just accepted their messages is the
+    /// one a reply has to use; an older dial that never became writable is
+    /// tried only if that write fails.
     fn live_conns(&self, id: EndpointId) -> Vec<Connection> {
         mutex(&self.conns)
             .get(&id)
             .map(|list| {
                 list.iter()
+                    .rev()
                     .filter(|(_, c)| c.close_reason().is_none())
                     .map(|(_, c)| c.clone())
                     .collect()
@@ -281,10 +294,14 @@ impl Node {
             let list = g.entry(id).or_default();
             list.retain(|(_, c)| c.close_reason().is_none());
             let was_up = !list.is_empty();
-            if list.len() >= 4 {
+            list.push((seq, conn.clone()));
+            // The oldest entry is often the inbound link their messages
+            // arrive on. Dropping it as soon as a few dials pile up left
+            // send with only the dials, which time out, while receive kept
+            // working on the connection that was removed.
+            while list.len() > 8 {
                 list.remove(0);
             }
-            list.push((seq, conn.clone()));
             was_up
         };
         if !was_up {
@@ -299,7 +316,9 @@ impl Node {
                 let Some(list) = g.get_mut(&id) else {
                     return;
                 };
-                let before = list.iter().any(|(_, c)| c.close_reason().is_none());
+                // closed().await has already completed, so close_reason is
+                // present on the last connection. Test membership, not liveness.
+                let before = !list.is_empty();
                 list.retain(|(s, c)| *s != seq && c.close_reason().is_none());
                 let after = !list.is_empty();
                 if list.is_empty() {
@@ -383,9 +402,15 @@ impl Node {
     }
 
     async fn send_bytes(self: &Arc<Self>, id: EndpointId, buf: &[u8]) -> Result<()> {
-        for conn in self.live_conns(id) {
-            if write_len_prefixed_conn(&conn, buf).await.is_ok() {
+        let conns = self.live_conns(id);
+        if !conns.is_empty() {
+            if write_any_conn(&conns, buf).await.is_ok() {
                 return Ok(());
+            }
+            // A half-open QUIC connection can remain cached after a network
+            // change. Do not retry it forever without attempting a new path.
+            for conn in &conns {
+                conn.close(0u32.into(), b"send path failed");
             }
         }
         let lock = mutex(&self.dials)
@@ -393,24 +418,62 @@ impl Node {
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
             .clone();
         let _dialing = lock.lock().await;
-        for conn in self.live_conns(id) {
-            if write_len_prefixed_conn(&conn, buf).await.is_ok() {
-                return Ok(());
-            }
+        let conns = self.live_conns(id);
+        if !conns.is_empty() {
+            return write_any_conn(&conns, buf).await;
         }
         let conn = self.dial_fresh(id).await?;
         write_len_prefixed_conn(&conn, buf).await
     }
 }
 
+/// Every live connection is tried at once. Followers often leave both an
+/// inbound link and a later dial open; trying them one after another let the
+/// dead dial use up the send timeout before the working link was reached.
+async fn write_any_conn(conns: &[Connection], buf: &[u8]) -> Result<()> {
+    let mut attempts = tokio::task::JoinSet::new();
+    for conn in conns {
+        let data = buf.to_vec();
+        let conn = conn.clone();
+        attempts.spawn(async move { write_len_prefixed_conn(&conn, &data).await });
+    }
+    let mut last = anyhow!("send failed");
+    while let Some(joined) = attempts.join_next().await {
+        match joined {
+            Ok(Ok(())) => {
+                attempts.abort_all();
+                return Ok(());
+            }
+            Ok(Err(e)) => last = e,
+            Err(e) => last = e.into(),
+        }
+    }
+    Err(last)
+}
+
 async fn write_len_prefixed_conn(conn: &Connection, data: &[u8]) -> Result<()> {
-    // A connection whose peer vanished can block here until the idle timeout;
-    // give up early so the caller can dial a fresh path.
-    let mut send = tokio::time::timeout(Duration::from_secs(5), conn.open_uni())
+    // A connection whose peer vanished can block here until the idle timeout.
+    // Keep each attempt short so a dead dial does not consume the whole send
+    // and skip the inbound link that is still delivering their messages.
+    let mut send = tokio::time::timeout(Duration::from_secs(2), conn.open_uni())
         .await
         .map_err(|_| anyhow!("open stream timed out"))?
         .context("open stream")?;
-    write_len_prefixed(&mut send, data).await
+    tokio::time::timeout(Duration::from_secs(8), async {
+        write_len_prefixed(&mut send, data).await?;
+        // finish() only queues bytes locally. A stalled connection used to
+        // win the race and cancel the working inbound connection's send.
+        if let Some(code) = send.stopped().await? {
+            // Older Mentos readers drop the stream after its exact payload,
+            // producing STOP_SENDING(0) before observing FIN.
+            if code != 0u32.into() {
+                return Err(anyhow!("peer stopped message stream: {code}"));
+            }
+        }
+        Ok(())
+    })
+        .await
+        .map_err(|_| anyhow!("write timed out"))?
 }
 
 async fn write_len_prefixed(send: &mut SendStream, data: &[u8]) -> Result<()> {
@@ -432,6 +495,9 @@ async fn read_len_prefixed(recv: &mut RecvStream) -> Result<Vec<u8>> {
     }
     let mut buf = vec![0u8; n];
     recv.read_exact(&mut buf).await?;
+    if recv.read(&mut [0u8; 1]).await?.is_some() {
+        return Err(anyhow!("trailing message bytes"));
+    }
     Ok(buf)
 }
 
@@ -1199,6 +1265,15 @@ fn blob_path_inner(hash: *const c_char) -> *mut c_char {
     }
 }
 
+/// `Path::rtt` panics when the path's connection handle is already gone.
+/// A status snapshot must survive that; a panic here used to look like
+/// "the node is offline" and the outgoing queue would never be touched.
+fn path_rtt_ms(rtt: impl FnOnce() -> Duration) -> Option<u64> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(rtt))
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
 fn status_inner() -> *mut c_char {
     let n = match with_node(|n| n.clone()) {
         Ok(n) => n,
@@ -1223,14 +1298,18 @@ fn status_inner() -> *mut c_char {
         .filter_map(|(id, list)| {
             let conn = list
                 .iter()
+                .rev()
                 .find(|(_, c)| c.close_reason().is_none())
                 .map(|(_, c)| c.clone())?;
+            // Path RTT reads a weak handle that panics once the path is gone.
+            // That used to fail this whole snapshot, and the app then treated
+            // the node as offline and refused to send.
             let paths = conn.paths();
             let selected = paths.iter().find(|p| p.is_selected());
             let kind = selected.as_ref().map(|p| {
                 if p.is_ip() { "direct" } else if p.is_relay() { "relay" } else { "none" }
             }).unwrap_or("none");
-            let rtt = selected.as_ref().map(|p| p.rtt().as_millis() as u64);
+            let rtt = selected.as_ref().and_then(|p| path_rtt_ms(|| p.rtt()));
             let routes: Vec<serde_json::Value> = paths.iter().filter_map(|p| {
                 let (kind, address) = match p.remote_addr() {
                     iroh::TransportAddr::Relay(url) => ("relay", url.to_string()),
@@ -1238,7 +1317,7 @@ fn status_inner() -> *mut c_char {
                     _ => return None,
                 };
                 Some(serde_json::json!({"kind": kind, "address": address,
-                    "selected": p.is_selected(), "rtt": p.rtt().as_millis() as u64}))
+                    "selected": p.is_selected(), "rtt": path_rtt_ms(|| p.rtt())}))
             }).collect();
             Some(serde_json::json!({"peer": hex_id(*id), "kind": kind, "rtt": rtt, "paths": routes}))
         })
@@ -1429,4 +1508,79 @@ pub extern "C" fn mentos_call_close(call_id: *const c_char) -> i32 {
 #[no_mangle]
 pub extern "C" fn mentos_call_stats(call_id: *const c_char) -> *mut c_char {
     guard(std::ptr::null_mut(), || call::stats_inner(call_id))
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+
+    fn local_addr(n: &Node) -> EndpointAddr {
+        let port = n.endpoint.bound_sockets().into_iter()
+            .find(|a| a.is_ipv4()).unwrap().port();
+        EndpointAddr::from(n.endpoint.id())
+            .with_ip_addr(std::net::SocketAddr::from(([127, 0, 0, 1], port)))
+    }
+
+    async fn received(n: &Node, payload: &[u8]) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let found = mutex(&n.events).iter().any(|s| {
+                    let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                    v["t"] == "direct" && v["data"] == B64.encode(payload)
+                });
+                if found { return; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("message did not arrive");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn multiple_inbound_peers_can_receive_replies_and_diagnostics() {
+        let root = std::env::temp_dir().join(format!("mentos-native-test-{}-{}",
+            std::process::id(), CONN_SEQ.fetch_add(1, Ordering::Relaxed)));
+        let hub = start_node([81; 32], root.join("hub")).await.unwrap();
+        let mut peers = Vec::new();
+        for key in [82, 83, 84] {
+            let peer = start_node([key; 32], root.join(key.to_string())).await.unwrap();
+            peer.remember(local_addr(&hub));
+            hub.remember(local_addr(&peer));
+            // Two inbound connections reproduce simultaneous/repeated dials.
+            for attempt in 0..2 {
+                let conn = tokio::time::timeout(Duration::from_secs(5), peer.dial_fresh(hub.endpoint.id()))
+                    .await.unwrap().unwrap();
+                write_len_prefixed_conn(&conn, &[key, attempt]).await.unwrap();
+                received(&hub, &[key, attempt]).await;
+            }
+            peer.send_bytes(hub.endpoint.id(), &[key]).await.unwrap();
+            received(&hub, &[key]).await;
+            peers.push(peer);
+        }
+        for (i, peer) in peers.iter().enumerate() {
+            let reply = format!("reply {i}");
+            hub.send_bytes(peer.endpoint.id(), reply.as_bytes()).await.unwrap();
+            received(peer, reply.as_bytes()).await;
+        }
+        let report = tokio::time::timeout(Duration::from_secs(8),
+            diag::snapshot(&hub, diag::Options::default())).await.unwrap();
+        assert_eq!(report["connections"].as_array().unwrap().len(), 6);
+        // The last close must emit link-down even though close_reason is set.
+        for peer in &peers {
+            peer.router.shutdown().await.unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let downs = mutex(&hub.events).iter().filter(|s| {
+                    let v: serde_json::Value = serde_json::from_str(s).unwrap();
+                    v["t"] == "link" && v["up"] == false
+                }).count();
+                if downs == peers.len() { break; }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("missing link-down events");
+        let report = diag::snapshot(&hub, diag::Options::default()).await;
+        assert!(report["connections"].as_array().unwrap().is_empty());
+        hub.router.shutdown().await.unwrap();
+        // Only this test's freshly created directory is removed.
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -183,10 +183,11 @@ class Engine {
   bool _sawStatus = false;
   int _runningPolls = 0;
   DateTime? _bindStarted;
-  Future<void>? _deliveryPump;
+  final _deliveryPumps = <Future<void>>{};
+  final _deliveryPeers = <String>{};
+  final _deliveryWake = <String>{};
   bool _flushingOutbox = false;
   bool _outboxAgain = false;
-  bool _deliveryAgain = false;
   Completer<void>? _outboxIdle;
   final _eventTasks = <Future<void>>{};
   final _eventWaiters = <Completer<void>>[];
@@ -418,7 +419,7 @@ class Engine {
       await s.cancel();
     }
     await net.stop();
-    await _deliveryPump;
+    await Future.wait(_deliveryPumps.toList());
     await Future.wait(_eventTasks.toList());
     await _outboxIdle?.future;
     _flush?.cancel();
@@ -578,12 +579,19 @@ class Engine {
     } catch (_) {
       return;
     }
-    if (_held) return;
+    if (_held || !st.running) return;
     final live = st.links.map((l) => l.peer).toSet()..remove(me.id);
     if (live.length == _links.length && live.containsAll(_links)) return;
+    final appeared = live.difference(_links);
     _links
       ..clear()
       ..addAll(live);
+    // A link-up event is easy to lose when the native queue is full of
+    // incoming messages. Those peers still need their queued sends woken.
+    for (final peer in appeared) {
+      db.reviveDeliveries(peer);
+    }
+    if (appeared.isNotEmpty) unawaited(flushDeliveries());
     _emit({Ch.presence, Ch.net});
   }
 
@@ -637,23 +645,22 @@ class Engine {
           _links.add(peer);
           _heard(peer);
           db.reviveDeliveries(peer);
-          unawaited(flushDeliveries());
-          await _hello(peer);
           db.reviveOutbox(peer);
-          await _onSpacePeer(peer);
-          await _flushOutbox();
-          unawaited(_retrySync(peer));
-          unawaited(_coin?.onPeer(peer));
-          for (final listing in marketBoard().where(
-            (r) => r['from'] == me.id,
-          )) {
-            unawaited(sendApp(peer, 'market', listing));
-          }
+          // Queue chat sends before hello, roster, and marketplace traffic.
+          // Several followers connecting at once used to hold every event
+          // slot inside those awaits, so this device's own messages never
+          // reached beginDelivery and stayed on "Waiting to send".
+          unawaited(flushDeliveries());
+          unawaited(_afterLink(peer));
         } else {
           _links.remove(peer);
           _emit({Ch.presence, Ch.net});
         }
       case DirectEvent(:final from, :final data):
+        if (_links.add(from)) {
+          db.reviveDeliveries(from);
+          unawaited(flushDeliveries());
+        }
         _heard(from);
         final msg = _decode(data);
         if (msg != null) await _onDirect(from, msg);
@@ -671,7 +678,10 @@ class Engine {
         _emit({Ch.net, Ch.presence});
       case StatusEvent():
         _sawStatus = true;
-        unawaited(_bringUp(forceDial: true));
+        // Address updates arrive every couple of seconds. Redialing every
+        // follower on each one piled up handshakes until a send on an
+        // already-open connection timed out and stayed "Waiting to send".
+        unawaited(_bringUp());
         _emit({Ch.net});
     }
   }
@@ -690,6 +700,9 @@ class Engine {
     Map<String, dynamic> msg,
   ) async {
     db.enqueueOutbox(id, peer, jsonEncode(msg));
+    // Someone is already connected. Dialing a different, offline follower
+    // here takes the only send lane for a full handshake.
+    if (_links.isNotEmpty && !_links.contains(peer)) return false;
     final ok = await _send(peer, msg);
     if (ok) {
       db.deleteOutbox(id);
@@ -711,7 +724,22 @@ class Engine {
     final idle = Completer<void>();
     _outboxIdle = idle;
     try {
-      for (final row in db.dueOutbox(nowMs())) {
+      final due = db.dueOutbox(nowMs());
+      final direct = due.where((row) {
+        final peer = _outboxPeer(row.peer);
+        return peer != null && _links.contains(peer);
+      }).toList();
+      final topics = due.where((row) => _outboxPeer(row.peer) == null).toList();
+      // Direct rows for people who are not connected stay queued until their
+      // link comes up. Topic rows do not dial one follower.
+      final waiting = due.where((row) {
+        final peer = _outboxPeer(row.peer);
+        return peer != null && !_links.contains(peer);
+      });
+      final batch = _links.isEmpty
+          ? due
+          : [...direct, ...topics, ...waiting.take(1)];
+      for (final row in batch) {
         if (!_running || _held) break;
         Map<String, dynamic>? msg;
         try {
@@ -747,6 +775,10 @@ class Engine {
     }
   }
 
+  /// A direct peer id. Topic routes (`gdm:`, `space:`, `feed:`, `quiet:`)
+  /// are not one person.
+  String? _outboxPeer(String route) => route.contains(':') ? null : route;
+
   Set<String> _messageRecipients(String scope) {
     final parts = Scope.parts(scope);
     final peers = <String>{};
@@ -769,33 +801,83 @@ class Engine {
     return peers.where((p) => !(db.peer(p)?.blocked ?? false)).toSet();
   }
 
-  /// Single flight across timer, reconnect, and manual retry. The recipient
-  /// snapshot is durable; no gossip send is treated as delivery to a group.
+  /// Single flight per recipient. A slow dial must not hold up another peer
+  /// that connects or receives a new message while that dial is in progress.
   Future<void> flushDeliveries() {
     if (!_running || _held) return Future.value();
-    if (_deliveryPump != null) {
-      _deliveryAgain = true;
-      return _deliveryPump!;
-    }
-    return _deliveryPump = (() async {
-      do {
-        _deliveryAgain = false;
-        await _pumpDeliveries();
-      } while (_deliveryAgain && _running && !_held);
-    })().whenComplete(() => _deliveryPump = null);
+    late final Future<void> pump;
+    pump = _pumpDeliveries().whenComplete(() => _deliveryPumps.remove(pump));
+    _deliveryPumps.add(pump);
+    return Future.wait(_deliveryPumps.toList()).then((_) {});
   }
 
   Future<void> _pumpDeliveries() async {
+    if (!_running || _held) return;
     try {
       if (!(await net.status()).running || !_running || _held) return;
     } catch (_) {
-      return; // Keep the durable queue intact until the transport recovers.
+      // A failed snapshot does not invalidate an authenticated live link.
+      if (_links.isEmpty) return;
     }
-    final due = db.dueDeliveries(nowMs());
-    for (var i = 0; i < due.length; i += 4) {
-      if (!_running || _held) break;
-      await Future.wait(due.skip(i).take(4).map(_attemptDelivery));
+    final batch = _deliveryOrder(db.dueDeliveries(nowMs(), peers: _links));
+    final tasks = <Future<void>>[];
+    for (final peer in batch.map((j) => j.peer).toSet()) {
+      if (_deliveryPeers.contains(peer)) {
+        _deliveryWake.add(peer);
+        continue;
+      }
+      // Reserve capacity for live peers even if an offline dial is pending.
+      final offline = !_links.contains(peer);
+      if (offline && _deliveryPeers.any((p) => !_links.contains(p))) continue;
+      if (!offline && _deliveryPeers.where(_links.contains).length >= 4) {
+        continue;
+      }
+      _deliveryPeers.add(peer);
+      tasks.add(() async {
+        try {
+          var jobs = batch.where((j) => j.peer == peer).toList();
+          do {
+            _deliveryWake.remove(peer);
+            for (final job in jobs) {
+              if (!_running || _held) break;
+              await _attemptDelivery(job);
+            }
+            if (!_running || _held || !_deliveryWake.remove(peer)) break;
+            jobs = db.dueDeliveries(nowMs(), peers: {peer})
+                .where((j) => j.peer == peer).toList();
+          } while (jobs.isNotEmpty);
+        } finally {
+          _deliveryPeers.remove(peer);
+          _deliveryWake.remove(peer);
+        }
+      }());
     }
+    await Future.wait(tasks);
+  }
+
+  /// Connected peers first, and the message that was just queued before a
+  /// backlog of older jobs for other followers. Offline peers are left due
+  /// until they connect, instead of each occupying the send lane with a dial.
+  List<RecipientDelivery> _deliveryOrder(List<RecipientDelivery> due) {
+    final linked = due.where((j) => _links.contains(j.peer)).toList();
+    final pool = linked.isNotEmpty ? linked : due;
+    final fresh = pool.where((j) => j.state == Delivery.queued).toList()
+      ..sort((a, b) => b.nextAt.compareTo(a.nextAt));
+    final seen = <String>{};
+    final first = <RecipientDelivery>[];
+    final rest = <RecipientDelivery>[];
+    for (final job in fresh) {
+      if (seen.add(job.peer)) {
+        first.add(job);
+      } else {
+        rest.add(job);
+      }
+    }
+    return [
+      ...first,
+      ...rest,
+      ...pool.where((j) => j.state != Delivery.queued),
+    ];
   }
 
   Future<void> _attemptDelivery(RecipientDelivery job) async {
@@ -886,6 +968,7 @@ class Engine {
     if (peers.isEmpty) return false;
     var any = false;
     for (final p in peers.take(32)) {
+      if (_links.isNotEmpty && !_links.contains(p)) continue;
       if (await _send(p, msg)) any = true;
     }
     return any;
@@ -919,6 +1002,19 @@ class Engine {
       );
     } catch (_) {
       return false;
+    }
+  }
+
+  /// Profile, roster, and other catch-up. Not awaited from the link event, so
+  /// one follower connecting cannot block receipts from the others.
+  Future<void> _afterLink(String peer) async {
+    await _hello(peer);
+    await _onSpacePeer(peer);
+    await _flushOutbox();
+    unawaited(_retrySync(peer));
+    unawaited(_coin?.onPeer(peer));
+    for (final listing in marketBoard().where((r) => r['from'] == me.id)) {
+      unawaited(sendApp(peer, 'market', listing));
     }
   }
 

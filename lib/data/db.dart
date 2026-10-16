@@ -827,12 +827,16 @@ class Db {
     return result;
   }
 
-  List<RecipientDelivery> dueDeliveries(int now) => _db
+  List<RecipientDelivery> dueDeliveries(
+    int now, {
+    Set<String> peers = const {},
+  }) => _db
       .select(
         "SELECT d.* FROM message_delivery d JOIN items i ON i.id = d.id "
         "WHERE d.state IN ('queued', 'sent') AND d.next_at <= ? AND (i.expires IS NULL OR i.expires > ?) "
-        'ORDER BY d.next_at, i.ts, d.id, d.peer LIMIT 32',
-        [now, now],
+        'ORDER BY ${peers.isEmpty ? "" : "CASE WHEN d.peer IN (${List.filled(peers.length, '?').join(',')}) THEN 0 ELSE 1 END,"} '
+        'd.next_at, i.ts, d.id, d.peer LIMIT 32',
+        [now, now, ...peers],
       )
       .map(_delivery)
       .whereType<RecipientDelivery>()
@@ -851,13 +855,17 @@ class Db {
     final attempts = job.attempts + 1;
     final failed = attempts >= 6;
     final delay = (5 * (1 << attempts.clamp(0, 6))).clamp(10, 300);
+    // A later retry can fail after the bytes were already handed off. That
+    // must not move the message back to "Waiting to send".
+    final alreadySent = job.state == Delivery.sent;
+    final state = failed ? 'failed' : (sent || alreadySent ? 'sent' : 'queued');
     _db.execute(
       "UPDATE message_delivery SET state = ?, next_at = ?, error = ? "
       "WHERE id = ? AND peer = ? AND state = 'sending' AND attempts = ?",
       [
-        failed ? 'failed' : (sent ? 'sent' : 'queued'),
+        state,
         nowMs() + delay * 1000,
-        sent
+        sent || alreadySent
             ? 'Waiting for the recipient to confirm receipt.'
             : 'Could not reach the recipient. Check your connection.',
         job.id,
@@ -891,7 +899,11 @@ class Db {
   );
 
   void reviveDeliveries(String peer) => _db.execute(
-    "UPDATE message_delivery SET state = 'queued', attempts = 0, next_at = 0, error = NULL "
+    "UPDATE message_delivery SET "
+    "state = CASE WHEN state = 'sent' THEN 'sent' ELSE 'queued' END, "
+    "attempts = CASE WHEN state = 'sent' THEN attempts ELSE 0 END, "
+    'next_at = 0, '
+    "error = CASE WHEN state = 'sent' THEN error ELSE NULL END "
     "WHERE peer = ? AND state IN ('queued', 'sent', 'failed')",
     [peer],
   );

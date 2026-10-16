@@ -372,42 +372,70 @@ final filesProvider = StreamProvider.autoDispose<List<StoredFile>>((ref) {
 });
 
 /// Network status, refreshed on network events and every few seconds.
-final netStatusProvider = StreamProvider.autoDispose<NetStatus>((ref) async* {
+final netStatusProvider = StreamProvider.autoDispose<NetStatus>((ref) {
   final e = _eng(ref);
   if (e == null) {
-    yield const NetStatus(nodeId: '', running: false);
-    return;
+    return Stream.value(const NetStatus(nodeId: '', running: false));
   }
-  try {
-    yield await e.netStatus();
-  } catch (_) {
-    yield NetStatus(nodeId: e.me.id, running: false);
-  }
-  final ticker = Stream.periodic(const Duration(seconds: 4));
-  final events = e.changes.where(
-    (k) => k.contains(Ch.net) || k.contains(Ch.presence),
+  return _networkPoll(
+    ref,
+    e.netStatus,
+    const Duration(seconds: 4),
+    updates: e.changes.where(
+      (k) => k.contains(Ch.net) || k.contains(Ch.presence),
+    ),
   );
-  await for (final _ in StreamGroup.merge([ticker, events])) {
-    try {
-      yield await e.netStatus();
-    } catch (_) {}
-  }
 });
 
 /// Native diagnostics, re-measured every few seconds while watched.
-final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((
-  ref,
-) async* {
+final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((ref) {
   final e = _eng(ref);
   if (e == null || !e.hasDiagnostics) {
-    yield null;
-    return;
+    return Stream.value(null);
   }
-  yield await e.diagnostics();
-  await for (final _ in Stream.periodic(const Duration(seconds: 3))) {
-    yield await e.diagnostics();
-  }
+  return _networkPoll(ref, e.diagnostics, const Duration(seconds: 3));
 });
+
+/// Own timers explicitly: cancelling an async* stream waiting on a periodic
+/// source can leave the old poll alive across refreshes and screen disposal.
+Stream<T> _networkPoll<T>(
+  Ref ref,
+  Future<T> Function() read,
+  Duration interval, {
+  Stream<Object?>? updates,
+}) {
+  final controller = StreamController<T>();
+  Timer? timer;
+  StreamSubscription<Object?>? subscription;
+  var disposed = false;
+  var busy = false;
+  Future<void> poll() async {
+    if (disposed || busy) return;
+    busy = true;
+    try {
+      final value = await read();
+      if (!disposed) controller.add(value);
+    } catch (error, stack) {
+      if (!disposed) controller.addError(error, stack);
+    } finally {
+      busy = false;
+    }
+  }
+
+  controller.onListen = () {
+    if (disposed) return;
+    timer = Timer.periodic(interval, (_) => unawaited(poll()));
+    subscription = updates?.listen((_) => unawaited(poll()));
+    unawaited(poll());
+  };
+  ref.onDispose(() {
+    disposed = true;
+    timer?.cancel();
+    unawaited(subscription?.cancel());
+    unawaited(controller.close());
+  });
+  return controller.stream;
+}
 
 final alertsProvider = StreamProvider.autoDispose<List<Alert>>((ref) {
   return _ready(
