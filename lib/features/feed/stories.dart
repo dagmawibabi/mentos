@@ -16,6 +16,7 @@ import '../../widgets/avatar.dart';
 import '../../widgets/media.dart';
 import '../../widgets/nsfw.dart';
 import '../../widgets/ui.dart';
+import 'story_stickers.dart';
 
 const storyColors = [
   Color(0xFF0D1110),
@@ -156,12 +157,24 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
     });
   int _i = 0;
   List<Item> _stories = const [];
+  bool _reacting = false;
+
+  /// The story question being answered, if the reply came from one.
+  String? _asking;
+  final _replyFocus = FocusNode();
 
   @override
   void dispose() {
     _anim.dispose();
     _reply.dispose();
+    _replyFocus.dispose();
     super.dispose();
+  }
+
+  void _ask(String question) {
+    _anim.stop();
+    setState(() => _asking = question);
+    _replyFocus.requestFocus();
   }
 
   void _next() {
@@ -186,6 +199,8 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
 
   void _start() {
     if (_stories.isEmpty) return;
+    _asking = null;
+    _reacting = false;
     final e = ref.read(engineProvider);
     e.markStorySeen(_stories[_i].id);
     e.recordView(_stories[_i]);
@@ -268,6 +283,12 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
                         ),
                       ),
                     ),
+                  StickerLayer(
+                    stickers: StorySticker.listFrom(s.body['stk']),
+                    nameOf: e.nameOf,
+                    onAsk: mine ? null : _ask,
+                    onPause: _anim.stop,
+                  ),
                 ],
               ),
             ),
@@ -381,8 +402,9 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
                           controller: _reply,
                           style: Txt.body(Colors.white),
                           cursorColor: Colors.white,
+                          focusNode: _replyFocus,
                           decoration: InputDecoration(
-                            hintText: 'Reply',
+                            hintText: _asking == null ? 'Reply' : 'Answer: $_asking',
                             hintStyle: Txt.body(Colors.white54),
                             filled: true,
                             fillColor: Colors.white10,
@@ -392,9 +414,10 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
                           onTap: () => _anim.stop(),
                           onSubmitted: (t) async {
                             if (t.trim().isEmpty) return;
-                            await e.storyReply(s, t);
+                            await e.storyReply(s, t, prompt: _asking);
                             _reply.clear();
-                            if (context.mounted) toast(context, 'Reply sent');
+                            setState(() => _asking = null);
+                            if (context.mounted) toast(context, 'Sent to their chat');
                           },
                         ),
                       ),
@@ -404,11 +427,54 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
                       color: st.liked ? const Color(0xFFFF5A7A) : Colors.white,
                       onTap: () => e.like(s.e.scope, s.id, !st.liked),
                     ),
-                    IconBtn(Icons.add_reaction_outlined, color: Colors.white, onTap: () => e.react(s.e.scope, s.id, '🔥')),
+                    if (!mine)
+                      IconBtn(
+                        Icons.add_reaction_outlined,
+                        color: Colors.white,
+                        tooltip: 'React',
+                        onTap: () {
+                          _anim.stop();
+                          setState(() => _reacting = !_reacting);
+                        },
+                      ),
                   ],
                 );
               }),
             ),
+            if (_reacting && !mine)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: MediaQuery.paddingOf(context).bottom + 68,
+                child: Builder(builder: (context) {
+                  final current = e.storyStats(s).reactions[e.me.id];
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(Radii.pill)),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        for (final r in storyReactions)
+                          GestureDetector(
+                            onTap: () {
+                              e.react(s.e.scope, s.id, current == r ? null : r);
+                              setState(() => _reacting = false);
+                              _anim.forward();
+                            },
+                            child: AnimatedScale(
+                              duration: Motion.fast,
+                              scale: current == r ? 1.25 : 1,
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: Text(r, style: const TextStyle(fontSize: 30)),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              ),
           ],
         ),
       ),
@@ -429,6 +495,19 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
   XFile? _image;
   bool _busy = false;
   bool _nsfw = false;
+  List<StorySticker> _stickers = const [];
+
+  Future<void> _addSticker() async {
+    final e = ref.read(engineProvider);
+    final people = [for (final x in e.people().where((x) => !x.blocked)) (x.id, x.name)];
+    final st = await pickSticker(context, people);
+    if (st == null || !mounted) return;
+    if (_stickers.length >= StorySticker.max) {
+      toast(context, 'Up to ${StorySticker.max} stickers');
+      return;
+    }
+    setState(() => _stickers = [..._stickers, st]);
+  }
 
   Future<void> _pick(ImageSource src) async {
     final x = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85);
@@ -436,7 +515,7 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
   }
 
   Future<void> _post() async {
-    if (_text.text.trim().isEmpty && _image == null) return;
+    if (_text.text.trim().isEmpty && _image == null && _stickers.isEmpty) return;
     setState(() => _busy = true);
     final e = ref.read(engineProvider);
     MediaRef? media;
@@ -448,6 +527,7 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
       media: media,
       color: _color,
       nsfw: _nsfw,
+      stickers: _stickers,
     );
     if (mounted) context.pop();
   }
@@ -485,6 +565,11 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
                 ),
               ),
             ),
+            EditableStickerLayer(
+              stickers: _stickers,
+              nameOf: (id) => ref.read(engineProvider).nameOf(id),
+              onChanged: (next) => setState(() => _stickers = next),
+            ),
             Positioned(
               top: 8,
               left: 8,
@@ -493,6 +578,7 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
                 children: [
                   IconBtn(Icons.close_rounded, color: Colors.white, onTap: () => context.pop()),
                   const Spacer(),
+                  IconBtn(Icons.emoji_emotions_outlined, color: Colors.white, tooltip: 'Stickers', onTap: _addSticker),
                   IconBtn(Icons.photo_outlined, color: Colors.white, onTap: () => _pick(ImageSource.gallery)),
                   IconBtn(Icons.photo_camera_outlined, color: Colors.white, onTap: () => _pick(ImageSource.camera)),
                   if (_image != null)
@@ -506,27 +592,35 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
               right: 16,
               child: Row(
                 children: [
-                  for (var i = 0; i < storyColors.length; i++)
-                    GestureDetector(
-                      onTap: () => setState(() => _color = i),
-                      child: Container(
-                        width: 28,
-                        height: 28,
-                        margin: const EdgeInsets.only(right: 8),
-                        decoration: BoxDecoration(
-                          color: storyColors[i],
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: i == _color ? 2.5 : 1),
-                        ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          for (var i = 0; i < storyColors.length; i++)
+                            GestureDetector(
+                              onTap: () => setState(() => _color = i),
+                              child: Container(
+                                width: 28,
+                                height: 28,
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
+                                  color: storyColors[i],
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white, width: i == _color ? 2.5 : 1),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
+                  ),
                   IconBtn(
                     _nsfw ? Icons.visibility_off_rounded : Icons.visibility_off_outlined,
                     color: _nsfw ? Colors.white : Colors.white70,
                     tooltip: 'NSFW',
                     onTap: () => setState(() => _nsfw = !_nsfw),
                   ),
-                  const Spacer(),
                   FilledButton(
                     style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black),
                     onPressed: _busy ? null : _post,

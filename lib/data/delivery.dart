@@ -30,6 +30,8 @@ class RecipientDelivery {
     this.attempts = 0,
     this.nextAt = 0,
     this.error,
+    this.deliveredAt,
+    this.readAt,
   });
 
   final String id;
@@ -38,6 +40,11 @@ class RecipientDelivery {
   final int attempts;
   final int nextAt;
   final String? error;
+
+  /// When the recipient confirmed or read it, by this device's clock.
+  /// Null for messages confirmed before these were recorded.
+  final int? deliveredAt;
+  final int? readAt;
 
   bool get pending =>
       {Delivery.queued, Delivery.sending, Delivery.sent}.contains(state);

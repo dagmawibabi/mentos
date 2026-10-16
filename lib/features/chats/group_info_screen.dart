@@ -18,13 +18,16 @@ class GroupInfoScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final e = ref.read(engineProvider);
+    ref.watch(chatsProvider);
     final g = e.group(id);
     if (g == null) {
       return Scaffold(appBar: AppBar(), body: const EmptyState(icon: Icons.groups_outlined, title: 'Group not found'));
     }
     final ids = {g.owner, ...g.members}.toList();
-    final myRole = g.roleOf(e.me.id);
-    final canAdmin = myRole.index <= Role.mod.index;
+    // Only the owner can change membership; the engine refuses anyone else,
+    // so admins are not shown controls that would silently do nothing.
+    final canAdmin = g.owner == e.me.id;
+    final pending = canAdmin ? e.pendingInvites(id) : const <String>[];
 
     return Scaffold(
       appBar: AppBar(
@@ -72,6 +75,19 @@ class GroupInfoScreen extends ConsumerWidget {
                       ], title: e.nameOf(mid).toUpperCase())
                   : null,
             ),
+          if (pending.isNotEmpty) ...[
+            SectionLabel('Invited, not answered yet'),
+            for (final pid in pending)
+              ListTile(
+                leading: Avatar(id: pid, size: 40),
+                title: Text(e.nameOf(pid)),
+                subtitle: Text('gets the group key only after accepting', style: Txt.mono(p.muted, size: 11)),
+                trailing: TextButton(
+                  onPressed: () => e.revokeGroupInvite(id, pid),
+                  child: Text('Revoke', style: Txt.small(p.danger)),
+                ),
+              ),
+          ],
         ],
       ),
     );

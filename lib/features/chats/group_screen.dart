@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+
+import '../../net/call/calls.dart';
+import '../calls/call_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -36,6 +39,14 @@ class GroupChatScreen extends ConsumerWidget {
         actions: [
           IconBtn(Icons.info_outline_rounded, tooltip: 'Technical',
               onTap: () => showScopeTech(context, scope, groupId: id)),
+          IconBtn(Icons.call_outlined, tooltip: 'Group call', onTap: () {
+            final others = {g.owner, ...g.members}.where((m) => m != ref.read(engineProvider).me.id).toList();
+            if (others.length + 1 > CallManager.maxMembers) {
+              toast(context, 'Group calls are limited to ${CallManager.maxMembers} people for now');
+              return;
+            }
+            startCall(context, ref, others, video: false);
+          }),
           IconBtn(Icons.groups_outlined, tooltip: 'Members', onTap: () => context.push('/g/${g.id}/info')),
           IconBtn(Icons.more_vert_rounded, onTap: () => _menu(context, ref, g)),
           const SizedBox(width: 4),

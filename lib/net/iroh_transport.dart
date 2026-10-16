@@ -6,7 +6,7 @@ import 'dart:typed_data';
 import 'iroh_native.dart';
 import 'transport.dart';
 
-class IrohTransport implements Transport {
+class IrohTransport implements Transport, NetTools, MediaLink {
   IrohTransport(this._n);
 
   final IrohNative _n;
@@ -54,18 +54,24 @@ class IrohTransport implements Transport {
         case 'gossip':
           final topic = m['topic'] as String?;
           final from = m['from'] as String?;
-          if (topic != null && from != null)
+          if (topic != null && from != null) {
             _events.add(GossipEvent(topic, from, _bytes(m['data'])));
+          }
         case 'link':
           final peer = m['peer'] as String?;
           if (peer != null) _events.add(LinkEvent(peer, m['up'] == true));
         case 'neighbor':
           final topic = m['topic'] as String?;
           final peer = m['peer'] as String?;
-          if (topic != null && peer != null)
+          if (topic != null && peer != null) {
             _events.add(NeighborEvent(topic, peer, m['up'] == true));
+          }
         case 'status':
           _events.add(StatusEvent());
+        case 'call':
+          final call = m['id'] as String?;
+          final peer = m['peer'] as String?;
+          if (call != null && peer != null) _events.add(MediaEvent(call, peer, m['up'] == true));
       }
     }
   }
@@ -74,8 +80,9 @@ class IrohTransport implements Transport {
     try {
       if (v is String) return Uint8List.fromList(base64Decode(v));
       if (v is Uint8List) return v;
-      if (v is List)
+      if (v is List) {
         return Uint8List.fromList(v.map((e) => (e as num).toInt()).toList());
+      }
     } catch (_) {}
     return Uint8List(0);
   }
@@ -172,12 +179,60 @@ class IrohTransport implements Transport {
     } catch (_) {}
   }
 
+  @override
+  Future<Map<String, dynamic>?> diagnostics() async {
+    final out = await _call('diag', null, null, lane: _diagLane, timeout: const Duration(seconds: 20));
+    return out is Map ? out.cast<String, dynamic>() : null;
+  }
+
+  @override
+  Future<double?> ping(String peer) async {
+    final out = await _call('ping', peer, null, lane: _diagLane, timeout: const Duration(seconds: 25));
+    return out is int && out >= 0 ? out / 1000 : null;
+  }
+
+  @override
+  String? setOptions(Map<String, Object?> options) {
+    try {
+      return _n.setOptions(jsonEncode(options));
+    } catch (e) {
+      return '$e';
+    }
+  }
+
+  bool get supportsCalls => _n.hasCalls;
+
+  @override
+  bool callListen(String call, List<String> peers) => _n.callListen(call, peers);
+  @override
+  bool callDial(String call, String peer) => _n.callDial(call, peer);
+  @override
+  int callSend(String call, Uint8List data) => _n.callSend(call, data);
+  @override
+  ({String peer, Uint8List data})? callRecv(String call) => _n.callRecv(call);
+  @override
+  int callMaxDatagram(String call) => _n.callMaxDatagram(call);
+  @override
+  void callDropPeer(String call, String peer) => _n.callDropPeer(call, peer);
+  @override
+  void callClose(String call) => _n.callClose(call);
+  @override
+  Map<String, dynamic>? callStats(String call) => _n.callStats(call);
+
+  @override
+  void networkChange() {
+    try {
+      _n.networkChange();
+    } catch (_) {}
+  }
+
   // Each worker runs blocking FFI calls one at a time. A blob fetch can hold
   // its worker for minutes, so fetches and imports get their own lanes and
   // never delay messages.
   final _msgLane = _Lane();
   final _blobLane = _Lane();
   final _fileLane = _Lane();
+  final _diagLane = _Lane();
 
   Future<Object?> _call(
     String op,
@@ -213,8 +268,9 @@ class IrohTransport implements Transport {
   Future<NetStatus> status() async {
     try {
       final m = _n.status();
-      if (m.isEmpty)
+      if (m.isEmpty) {
         return NetStatus(nodeId: '', running: false, engine: 'iroh');
+      }
       final links = <LinkInfo>[];
       for (final l in (m['links'] as List?) ?? const []) {
         if (l is! Map) continue;
@@ -334,6 +390,10 @@ void _nativeIo(SendPort parent) {
           } catch (e) {
             reply.send(_Failure(e is StateError ? e.message : '$e'));
           }
+        case 'diag':
+          reply.send(n.diagnostics());
+        case 'ping':
+          reply.send(n.ping(msg[1] as String));
         default:
           reply.send(false);
       }

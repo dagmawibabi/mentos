@@ -23,8 +23,18 @@ class TransfersScreen extends ConsumerWidget {
     final people = ref.watch(peopleProvider).value ?? const <Peer>[];
     final online = people.where((x) => !x.blocked).toList();
 
+    final moving = xfers.where((x) => x.state == XferState.active).toList();
+    final speed = moving.fold<int>(0, (a, x) => a + x.bps);
+    final left = moving.fold<int>(0, (a, x) => a + (x.total - x.done).clamp(0, 1 << 40));
+
     return Scaffold(
-      appBar: AppBar(title: const Text('File transfer')),
+      appBar: AppBar(
+        title: const Text('File transfer'),
+        actions: [
+          IconBtn(Icons.tune_rounded, tooltip: 'Transfer settings', onTap: () => _settings(context, ref)),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: Space.xxl),
         children: [
@@ -35,6 +45,25 @@ class TransfersScreen extends ConsumerWidget {
               style: Txt.small(p.muted),
             ),
           ),
+          if (moving.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
+              padding: const EdgeInsets.all(Space.md),
+              decoration: BoxDecoration(color: p.accentSoft, borderRadius: BorderRadius.circular(Radii.md)),
+              child: Row(
+                children: [
+                  Icon(Icons.swap_vert_rounded, color: p.accent, size: 20),
+                  const SizedBox(width: Space.sm),
+                  Expanded(
+                    child: Text(
+                      '${moving.length} moving · ${speed > 0 ? '${bytes(speed)}/s' : 'starting'}'
+                      '${speed > 0 && left > 0 ? ' · about ${_eta(left ~/ speed)} left' : ''}',
+                      style: Txt.mono(p.ink, size: 11.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           SectionLabel('Send to'),
           if (online.isEmpty)
             const Padding(
@@ -57,15 +86,75 @@ class TransfersScreen extends ConsumerWidget {
   }
 }
 
-class _XferTabs extends StatefulWidget {
+String _eta(int seconds) => seconds < 60
+    ? '${seconds}s'
+    : seconds < 3600
+        ? '${seconds ~/ 60}m ${seconds % 60}s'
+        : '${seconds ~/ 3600}h ${(seconds % 3600) ~/ 60}m';
+
+void _settings(BuildContext context, WidgetRef ref) {
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    builder: (ctx) => Consumer(builder: (ctx, ref, _) {
+      final p = ctx.pal;
+      final s = ref.watch(settingsProvider);
+      final n = ref.read(settingsProvider.notifier);
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm),
+              child: Text('Transfer settings', style: Txt.title(p.ink)),
+            ),
+            SwitchTile(
+              icon: Icons.download_done_rounded,
+              title: 'Auto-accept from people you follow',
+              subtitle: 'Files up to ${s.xferAutoMaxMb} MB start without asking. Everyone else still asks.',
+              value: s.xferAutoAccept,
+              onChanged: (v) => n.update((x) => x.copyWith(xferAutoAccept: v)),
+            ),
+            if (s.xferAutoAccept)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                child: Segmented<int>(
+                  value: s.xferAutoMaxMb,
+                  options: const {10: '10 MB', 50: '50 MB', 200: '200 MB', 1024: '1 GB'},
+                  onChanged: (v) => n.update((x) => x.copyWith(xferAutoMaxMb: v)),
+                ),
+              ),
+            SectionLabel('At the same time'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+              child: Segmented<int>(
+                value: s.xferParallel,
+                options: const {1: '1', 2: '2', 3: '3', 5: '5'},
+                onChanged: (v) => n.update((x) => x.copyWith(xferParallel: v)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, Space.lg),
+              child: Text('Downloads beyond this wait in a queue and start as others finish.',
+                  style: Txt.small(p.muted)),
+            ),
+          ],
+        ),
+      );
+    }),
+  );
+}
+
+class _XferTabs extends ConsumerStatefulWidget {
   const _XferTabs({required this.xfers});
   final List<FileTransfer> xfers;
 
   @override
-  State<_XferTabs> createState() => _XferTabsState();
+  ConsumerState<_XferTabs> createState() => _XferTabsState();
 }
 
-class _XferTabsState extends State<_XferTabs> {
+class _XferTabsState extends ConsumerState<_XferTabs> {
   int _tab = 0;
 
   @override
@@ -83,6 +172,17 @@ class _XferTabsState extends State<_XferTabs> {
             onChanged: (v) => setState(() => _tab = v),
           ),
         ),
+        if (_tab == 1 && done.isNotEmpty)
+          Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.only(right: Space.md),
+              child: TextButton(
+                onPressed: () => ref.read(engineProvider).clearFinishedTransfers(),
+                child: const Text('Clear list'),
+              ),
+            ),
+          ),
         if (list.isEmpty)
           EmptyState(
             icon: _tab == 0 ? Icons.swap_horiz_rounded : Icons.inventory_2_outlined,

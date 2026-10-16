@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +13,7 @@ import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
+import '../calls/live_screen.dart';
 
 /// A channel: one voice at the top, everyone else reads and comments.
 class BroadcastScreen extends ConsumerStatefulWidget {
@@ -34,6 +37,7 @@ class BroadcastScreen extends ConsumerStatefulWidget {
 class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
   final _text = TextEditingController();
   bool _sending = false;
+  bool _silent = false;
 
   @override
   void dispose() {
@@ -53,9 +57,15 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
     final channel = space?.channels.where((c) => c.id == widget.channelId).firstOrNull;
     final name = widget.title ?? bcast?.name ?? channel?.name ?? e.nameOf(widget.owner);
     final about = (bcast?.about ?? channel?.about ?? '').trim();
+    ref.watch(broadcastsProvider);
     final subs = widget.spaceId == null
-        ? (ref.watch(peopleProvider).value ?? const []).where((x) => x.iFollow || x.followsMe).length
+        ? (bcast == null ? 0 : e.subscribers(bcast).length)
         : (ref.watch(membersProvider(widget.spaceId!)).value ?? const []).length;
+    final state = bcast == null ? (pinned: null, comments: true) : e.channelState(bcast);
+    final pinned = state.pinned == null ? null : posts.where((x) => x.id == state.pinned).firstOrNull;
+    final subscribed = bcast != null && e.isSubscribed(bcast.owner, bcast.id);
+    final scope = Scope.bcast(widget.owner, widget.channelId);
+    final muted = e.db.chat(scope)['muted'] == 1;
 
     return Scaffold(
       appBar: AppBar(
@@ -82,13 +92,21 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           ),
         ),
         actions: [
+          if (bcast != null && bcast.owner == e.me.id)
+            IconBtn(Icons.sensors_rounded, tooltip: 'Go live', onTap: () => goLive(context, ref, bcast)),
           IconBtn(Icons.more_horiz_rounded, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
           const SizedBox(width: 4),
         ],
       ),
       body: Column(
         children: [
-          if (about.isNotEmpty) _Pinned(text: about, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
+          if (pinned != null)
+            _Pinned(
+              text: pinned.text.isNotEmpty ? pinned.text : 'Pinned post',
+              onTap: () => context.push('/post/${pinned.id}'),
+            )
+          else if (about.isNotEmpty)
+            _Pinned(text: about, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
           Expanded(
             child: posts.isEmpty
                 ? EmptyState(
@@ -102,10 +120,44 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                     reverse: true,
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                     children: [
-                      for (final post in posts) _ChannelPost(post: post),
+                      for (final post in posts)
+                        _ChannelPost(
+                          post: post,
+                          comments: state.comments,
+                          onLongPress: mine && bcast != null
+                              ? () => showActions(context, [
+                                    SheetAction(
+                                      Icons.push_pin_outlined,
+                                      state.pinned == post.id ? 'Unpin' : 'Pin to top',
+                                      () => e.setChannelState(bcast,
+                                          pinned: state.pinned == post.id ? null : post.id, comments: state.comments),
+                                    ),
+                                  ])
+                              : null,
+                        ),
                     ],
                   ),
           ),
+          if (!mine && bcast != null)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: subscribed
+                      ? OutlinedButton.icon(
+                          icon: Icon(muted ? Icons.notifications_off_outlined : Icons.notifications_none_rounded, size: 18),
+                          label: Text(muted ? 'Unmute' : 'Mute'),
+                          onPressed: () => e.updateChat(scope, {'muted': muted ? 0 : 1}),
+                        )
+                      : FilledButton(
+                          onPressed: () => e.subscribe(bcast, true),
+                          child: const Text('Subscribe'),
+                        ),
+                ),
+              ),
+            ),
           if (mine)
             SafeArea(
               top: false,
@@ -113,6 +165,16 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
                 child: Row(
                   children: [
+                    if (widget.spaceId == null)
+                      IconBtn(
+                        _silent ? Icons.notifications_off_outlined : Icons.notifications_none_rounded,
+                        tooltip: _silent ? 'Silent: subscribers get no notification' : 'Subscribers get notified',
+                        active: _silent,
+                        onTap: () {
+                          setState(() => _silent = !_silent);
+                          toast(context, _silent ? 'Next post is silent' : 'Subscribers will be notified');
+                        },
+                      ),
                     Expanded(
                       child: TextField(
                         controller: _text,
@@ -147,8 +209,10 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
             bcastId: widget.spaceId == null ? widget.channelId : null,
             channelId: widget.spaceId == null ? null : widget.channelId,
             spaceId: widget.spaceId,
+            silent: _silent,
           );
       _text.clear();
+      if (mounted) setState(() => _silent = false);
     } catch (err) {
       if (mounted) toast(context, 'Could not broadcast: $err');
     } finally {
@@ -158,6 +222,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
 
   void _info(BuildContext context, String name, String about, int subs, String ownerName) {
     final p = context.pal;
+    final bcast = ref.read(engineProvider).broadcasts(owner: widget.owner).where((b) => b.id == widget.channelId).firstOrNull;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -181,6 +246,7 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
               _InfoRow(label: 'Owner', value: ownerName),
               _InfoRow(label: 'Subscribers', value: compact(subs)),
               _InfoRow(label: 'Posts', value: 'one voice, comments underneath'),
+              if (bcast != null) _ChannelControls(bcast: bcast),
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
@@ -235,21 +301,98 @@ class _Pinned extends StatelessWidget {
   }
 }
 
-class _ChannelPost extends ConsumerWidget {
-  const _ChannelPost({required this.post});
-  final PostView post;
+/// Owner and subscriber switches shown in the channel's info sheet.
+class _ChannelControls extends ConsumerWidget {
+  const _ChannelControls({required this.bcast});
+  final Bcast bcast;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(broadcastsProvider);
+    final e = ref.read(engineProvider);
+    final p = context.pal;
+    final mine = bcast.owner == e.me.id;
+    final state = e.channelState(bcast);
+    final subs = e.subscribers(bcast).toList();
+    return Column(
+      children: [
+        if (mine)
+          SwitchTile(
+            title: 'Comments',
+            subtitle: 'Let subscribers reply under posts',
+            value: state.comments,
+            onChanged: (v) => e.setChannelState(bcast, pinned: state.pinned, comments: v),
+          ),
+        if (!mine && e.isSubscribed(bcast.owner, bcast.id))
+          RowTile(
+            title: 'Leave channel',
+            danger: true,
+            onTap: () {
+              e.subscribe(bcast, false);
+              Navigator.pop(context);
+            },
+          ),
+        if (mine && subs.isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: Text('Subscribers', style: Txt.body(p.ink)),
+            children: [
+              for (final id in subs)
+                ListTile(
+                  dense: true,
+                  leading: Avatar(id: id, size: 30),
+                  title: Text(e.nameOf(id)),
+                  onTap: () => context.push('/u/$id'),
+                ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _ChannelPost extends ConsumerStatefulWidget {
+  const _ChannelPost({required this.post, this.comments = true, this.onLongPress});
+  final PostView post;
+  final bool comments;
+  final VoidCallback? onLongPress;
+
+  @override
+  ConsumerState<_ChannelPost> createState() => _ChannelPostState();
+}
+
+class _ChannelPostState extends ConsumerState<_ChannelPost> {
+  Timer? _seen;
+
+  @override
+  void initState() {
+    super.initState();
+    // Counts a view once the post has been on screen for a moment.
+    _seen = Timer(const Duration(milliseconds: 1200), () {
+      final e = ref.read(maybeEngineProvider);
+      if (mounted && e != null && widget.post.author != e.me.id) unawaited(e.recordView(widget.post.item));
+    });
+  }
+
+  @override
+  void dispose() {
+    _seen?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final p = context.pal;
     final e = ref.read(engineProvider);
+    final post = widget.post;
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Material(
         color: p.surface,
         borderRadius: BorderRadius.circular(16),
         child: InkWell(
-          onTap: () => context.push('/post/${post.id}'),
+          onTap: widget.comments ? () => context.push('/post/${post.id}') : null,
+          onLongPress: widget.onLongPress,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
@@ -264,6 +407,15 @@ class _ChannelPost extends ConsumerWidget {
                 if (post.text.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(post.text, style: Txt.body(p.ink)),
+                ],
+                if (post.item.body['live'] is Map && !post.edited && post.author != e.me.id) ...[
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(backgroundColor: p.danger, minimumSize: const Size(0, 36)),
+                    onPressed: () => joinLive(context, ref, post.item),
+                    icon: const Icon(Icons.sensors_rounded, size: 18),
+                    label: const Text('Join live'),
+                  ),
                 ],
                 const SizedBox(height: 8),
                 Row(
@@ -285,7 +437,7 @@ class _ChannelPost extends ConsumerWidget {
                     ),
                   ],
                 ),
-                if (post.comments > 0)
+                if (post.comments > 0 && widget.comments)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(

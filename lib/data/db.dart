@@ -104,6 +104,22 @@ class Db {
         PRAGMA user_version = 4;
       ''');
     }
+    if (v < 5) {
+      _db.execute('''
+        ALTER TABLE message_delivery ADD COLUMN delivered_at INTEGER;
+        ALTER TABLE message_delivery ADD COLUMN read_at INTEGER;
+        PRAGMA user_version = 5;
+      ''');
+    }
+    if (v < 6) {
+      _db.execute('''
+        CREATE TABLE IF NOT EXISTS ledger(
+          pair TEXT NOT NULL, seq INTEGER NOT NULL, peer TEXT NOT NULL, data TEXT NOT NULL,
+          state TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY(pair, seq, state));
+        CREATE INDEX IF NOT EXISTS ledger_peer ON ledger(peer, state);
+        PRAGMA user_version = 6;
+      ''');
+    }
   }
 
   /// Copies every committed page into [destPath]. A plain file copy of a WAL
@@ -758,6 +774,8 @@ class Db {
         attempts: r['attempts'] is num ? (r['attempts'] as num).toInt() : 0,
         nextAt: r['next_at'] is num ? (r['next_at'] as num).toInt() : 0,
         error: r['error'] is String ? r['error'] as String : null,
+        deliveredAt: r['delivered_at'] is num ? (r['delivered_at'] as num).toInt() : null,
+        readAt: r['read_at'] is num ? (r['read_at'] as num).toInt() : null,
       );
     } catch (_) {
       return null;
@@ -831,11 +849,13 @@ class Db {
   }) {
     // Peer comes from the authenticated direct transport, never from the body.
     // Late receipts may upgrade cancelled jobs: cancellation cannot unsend bytes.
+    final now = nowMs();
     _db.execute(
-      "UPDATE message_delivery SET state = ?, error = NULL WHERE id = ? AND peer = ? "
-      "AND state != 'saved' AND state != 'read' "
+      "UPDATE message_delivery SET state = ?, error = NULL, "
+      'delivered_at = COALESCE(delivered_at, ?), read_at = CASE WHEN ? THEN COALESCE(read_at, ?) ELSE read_at END '
+      "WHERE id = ? AND peer = ? AND state != 'saved' AND state != 'read' "
       'AND EXISTS(SELECT 1 FROM items WHERE id = ? AND scope = ? AND owned = 1)',
-      [read ? 'read' : 'delivered', id, peer, id, scope],
+      [read ? 'read' : 'delivered', now, read ? 1 : 0, now, id, peer, id, scope],
     );
   }
 
@@ -883,4 +903,141 @@ class Db {
     'INSERT OR IGNORE INTO message_read(id, peer, scope, expires) VALUES(?, ?, ?, ?)',
     [e.id, e.author, e.scope, e.expires],
   );
+
+  // ---------- explorer ----------
+
+  /// Tables the data explorer may list. Fixed so a table name never comes
+  /// from user input.
+  static const explorable = [
+    'items', 'peers', 'grants', 'spaces', 'groups', 'files', 'bookmarks', 'receipts',
+    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'kv',
+  ];
+
+  Map<String, int> tableCounts() => {
+    for (final t in explorable)
+      t: _db.select('SELECT COUNT(*) c FROM $t').first['c'] as int,
+  };
+
+  /// Per kind: how many items, how many created here, and their signed size.
+  List<({String kind, int count, int owned, int bytes})> kindStats() => _db
+      .select(
+        'SELECT kind, COUNT(*) c, SUM(owned) o, SUM(LENGTH(payload) + LENGTH(sig)) b '
+        'FROM items GROUP BY kind ORDER BY c DESC',
+      )
+      .map((r) => (
+            kind: r['kind'] as String,
+            count: r['c'] as int,
+            owned: (r['o'] as int?) ?? 0,
+            bytes: (r['b'] as int?) ?? 0,
+          ))
+      .toList();
+
+  List<({String scope, int count, int bytes, int last})> scopeStats({String? kind, int limit = 300}) => _db
+      .select(
+        'SELECT scope, COUNT(*) c, SUM(LENGTH(payload) + LENGTH(sig)) b, MAX(ts) t FROM items '
+        '${kind == null ? '' : 'WHERE kind = ? '}GROUP BY scope ORDER BY t DESC LIMIT ?',
+        [?kind, limit],
+      )
+      .map((r) => (
+            scope: r['scope'] as String,
+            count: r['c'] as int,
+            bytes: (r['b'] as int?) ?? 0,
+            last: (r['t'] as int?) ?? 0,
+          ))
+      .toList();
+
+  /// Newest-first page of stored items. [before] is the previous page's last
+  /// (ts, id) so pages stay stable while new items arrive.
+  List<Item> browseItems({
+    String? kind,
+    String? scope,
+    String? author,
+    bool? owned,
+    String? query,
+    ({int ts, String id})? before,
+    int limit = 100,
+  }) {
+    final where = <String>[];
+    final args = <Object?>[];
+    if (kind != null) {
+      where.add('kind = ?');
+      args.add(kind);
+    }
+    if (scope != null) {
+      where.add('scope = ?');
+      args.add(scope);
+    }
+    if (author != null) {
+      where.add('author = ?');
+      args.add(author);
+    }
+    if (owned != null) {
+      where.add('owned = ?');
+      args.add(owned ? 1 : 0);
+    }
+    final q = query?.trim() ?? '';
+    if (q.isNotEmpty) {
+      where.add("(payload LIKE ? ESCAPE '\\' OR id = ?)");
+      args.add('%${q.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%');
+      args.add(q);
+    }
+    if (before != null) {
+      where.add('(ts < ? OR (ts = ? AND id < ?))');
+      args.addAll([before.ts, before.ts, before.id]);
+    }
+    args.add(limit.clamp(1, 1000));
+    return _db
+        .select(
+          'SELECT * FROM items ${where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}'} '
+          'ORDER BY ts DESC, id DESC LIMIT ?',
+          args,
+        )
+        .map(_row)
+        .whereType<Item>()
+        .toList();
+  }
+
+  /// Raw rows of an explorable table, newest rowid first.
+  List<Map<String, Object?>> tableRows(String table, {int limit = 200, int offset = 0}) {
+    if (!explorable.contains(table)) throw ArgumentError.value(table, 'table');
+    return _db
+        .select('SELECT * FROM $table ORDER BY rowid DESC LIMIT ? OFFSET ?', [limit, offset])
+        .map((r) => {for (final c in r.keys) c: r[c]})
+        .toList();
+  }
+
+  /// Bytes used by the database file and its write-ahead log.
+  int fileBytes() {
+    var n = 0;
+    for (final suffix in ['', '-wal', '-shm']) {
+      final f = File('$path$suffix');
+      if (f.existsSync()) n += f.lengthSync();
+    }
+    return n;
+  }
+
+  // ---------- credit ledger ----------
+  // state: 'done' for entries both people signed; 'out' for a payment this
+  // device proposed; 'in' for one waiting for this person's approval.
+
+  void putLedger(String pair, int seq, String peer, String state, String data, int ts) => _db.execute(
+        'INSERT OR REPLACE INTO ledger(pair, seq, peer, data, state, ts) VALUES(?, ?, ?, ?, ?, ?)',
+        [pair, seq, peer, data, state, ts],
+      );
+
+  void deleteLedger(String pair, int seq, String state) =>
+      _db.execute('DELETE FROM ledger WHERE pair = ? AND seq = ? AND state = ?', [pair, seq, state]);
+
+  List<String> ledgerRows(String pair, {String state = 'done'}) => _db
+      .select('SELECT data FROM ledger WHERE pair = ? AND state = ? ORDER BY seq ASC', [pair, state])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  List<({String peer, String data, String state})> ledgerPending() => _db
+      .select("SELECT peer, data, state FROM ledger WHERE state != 'done' ORDER BY ts DESC")
+      .map((r) => (peer: r['peer'] as String, data: r['data'] as String, state: r['state'] as String))
+      .toList();
+
+  List<String> ledgerPeers() =>
+      _db.select('SELECT DISTINCT peer FROM ledger').map((r) => r['peer'] as String).toList();
 }

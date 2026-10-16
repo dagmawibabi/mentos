@@ -63,6 +63,7 @@ class _PostScreenState extends ConsumerState<PostScreen> {
           }
           WidgetsBinding.instance.addPostFrameCallback((_) => e.recordView(pv.item));
           final byId = {for (final c in comments) c.item.id: c};
+          final open = e.commentsOpen(pv);
           return Column(
             children: [
               Expanded(
@@ -71,7 +72,7 @@ class _PostScreenState extends ConsumerState<PostScreen> {
                     PostCard(post: pv, detailed: true),
                     const Hairline(),
                     SectionLabel(
-                      comments.isEmpty ? 'No comments yet' : '${comments.length} comments',
+                      !open ? 'Comments are off' : comments.isEmpty ? 'No comments yet' : '${comments.length} comments',
                       trailing: Text('from people online or kept', style: Txt.mono(p.faint, size: 10.5)),
                     ),
                     for (final c in comments)
@@ -89,6 +90,7 @@ class _PostScreenState extends ConsumerState<PostScreen> {
                   ],
                 ),
               ),
+              if (open)
               Container(
                 decoration: BoxDecoration(color: p.bg, border: Border(top: BorderSide(color: p.line))),
                 child: SafeArea(

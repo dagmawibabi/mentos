@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/models.dart';
+import '../net/diagnostics.dart';
 import '../net/engine.dart';
+import '../net/engine_net.dart';
 import '../net/transport.dart';
 import '../net/views.dart';
 import 'session.dart';
@@ -196,6 +198,19 @@ final netStatusProvider = StreamProvider.autoDispose<NetStatus>((ref) async* {
     try {
       yield await e.netStatus();
     } catch (_) {}
+  }
+});
+
+/// Native diagnostics, re-measured every few seconds while watched.
+final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((ref) async* {
+  final e = _eng(ref);
+  if (e == null || !e.hasDiagnostics) {
+    yield null;
+    return;
+  }
+  yield await e.diagnostics();
+  await for (final _ in Stream.periodic(const Duration(seconds: 3))) {
+    yield await e.diagnostics();
   }
 });
 

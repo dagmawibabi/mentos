@@ -9,7 +9,7 @@ import '../../core/theme/tokens.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../widgets/ui.dart';
-import 'lock_gate.dart';
+import '../../core/pin.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -112,12 +112,11 @@ class SettingsScreen extends ConsumerWidget {
             value: s.hideStrangers,
             onChanged: (v) => n.update((x) => x.copyWith(hideStrangers: v)),
           ),
-          SwitchTile(
+          RowTile(
             icon: Icons.notifications_outlined,
-            title: 'Banner when a file arrives',
-            subtitle: 'Nothing else interrupts the screen. Muted chats stay quiet.',
-            value: s.systemNotify,
-            onChanged: (v) => n.update((x) => x.copyWith(systemNotify: v)),
+            title: 'Notifications',
+            subtitle: s.systemNotify ? 'Messages, mentions, invites and more' : 'Off',
+            onTap: () => context.push('/notifications'),
           ),
           SwitchTile(
             icon: Icons.visibility_off_outlined,
@@ -161,9 +160,39 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => _quota(context, ref),
           ),
           RowTile(icon: Icons.folder_outlined, title: 'Files on this phone', onTap: () => context.push('/files')),
+          RowTile(
+            icon: Icons.data_object_rounded,
+            title: 'Data explorer',
+            subtitle: 'Browse, verify and export everything stored here',
+            onTap: () => context.push('/data'),
+          ),
           RowTile(icon: Icons.hub_outlined, title: 'Network and custody', onTap: () => context.go('/network')),
+          RowTile(
+            icon: Icons.shield_outlined,
+            title: 'Privacy and transports',
+            subtitle: switch (s.privacy) {
+              'relay' => 'Hide my IP',
+              'tor' => 'Tor via ${s.proxyUrl}',
+              _ => 'Standard',
+            },
+            onTap: () => context.push('/privacy'),
+          ),
+          RowTile(icon: Icons.monitor_heart_outlined, title: 'Network diagnostics', onTap: () => context.push('/diagnostics')),
           RowTile(icon: Icons.block_rounded, title: 'Blocked people', onTap: () => context.push('/people?tab=3')),
+          SectionLabel('Money'),
+          RowTile(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'Wallet',
+            subtitle: 'Credits you and your contacts owe each other',
+            onTap: () => context.push('/wallet'),
+          ),
           SectionLabel('Identity'),
+          RowTile(
+            icon: Icons.switch_account_outlined,
+            title: 'Accounts',
+            subtitle: 'Add another identity or switch between them',
+            onTap: () => context.push('/accounts'),
+          ),
           RowTile(
             icon: Icons.key_rounded,
             title: 'Recovery phrase',
@@ -278,13 +307,24 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (pin == null || (pin.isNotEmpty && pin.length < 4)) return;
+    if (pin == null) return;
     if (pin.isEmpty) {
       ref.read(settingsProvider.notifier).update((x) => x.copyWith(lockHash: '', lockBio: false));
       return;
     }
+    if (pin.length < 4 || !RegExp(r'^\d+$').hasMatch(pin)) {
+      if (context.mounted) toast(context, 'Use at least 4 digits');
+      return;
+    }
+    if (!context.mounted) return;
+    final again = await prompt(context, title: 'Repeat the PIN', action: 'Save', maxLength: 32);
+    if (again?.trim() != pin) {
+      if (context.mounted) toast(context, 'PINs did not match');
+      return;
+    }
+    final hash = await PinHash.create(pin);
     ref.read(settingsProvider.notifier).update((x) => x.copyWith(
-          lockHash: pin.isEmpty ? '' : pinHash(pin),
+          lockHash: hash,
           lockAfter: x.lockAfter == 0 ? 60 : x.lockAfter,
         ));
   }

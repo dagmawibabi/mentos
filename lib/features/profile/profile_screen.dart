@@ -16,6 +16,7 @@ import '../activity/activity_screen.dart';
 import '../bookmarks/bookmarks_screen.dart';
 import '../common/attach.dart';
 import '../files/hosted_list.dart';
+import '../wallet/wallet_screen.dart';
 import '../feed/post_card.dart';
 import '../../widgets/profile_header.dart';
 
@@ -70,15 +71,9 @@ class MyProfileScreen extends ConsumerWidget {
                         visualDensity: VisualDensity.compact,
                       ),
                       onPressed: () async {
-                        final picked = await pickFiles(e.media);
-                        if (picked.isEmpty) return;
                         try {
-                          for (final f in picked) {
-                            final media = await importPending(e, f, scope: Scope.files(e.me.id));
-                            await e.hostFile(media, keep: true);
-                          }
-                          e.notifyFiles();
-                          if (context.mounted) toast(context, 'Hosting');
+                          final n = await hostPickedFiles(context, e);
+                          if (n > 0 && context.mounted) toast(context, 'Hosting');
                         } catch (err) {
                           if (context.mounted) toast(context, 'Could not host: $err');
                         }
@@ -209,13 +204,18 @@ class ProfileScreen extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: Space.sm),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => _sendFile(context, e, id),
-                    icon: const Icon(Icons.file_upload_outlined, size: 18),
-                    label: const Text('Send file'),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _sendFile(context, e, id),
+                        icon: const Icon(Icons.file_upload_outlined, size: 18),
+                        label: const Text('Send file'),
+                      ),
+                    ),
+                    const SizedBox(width: Space.sm),
+                    Expanded(child: WalletChip(peer: id)),
+                  ],
                 ),
               ],
             ),

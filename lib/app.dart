@@ -4,6 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/tokens.dart';
+import 'features/calls/call_screen.dart';
+import 'state/background.dart';
+import 'state/calls.dart';
+import 'state/notifications.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
 import 'features/settings/lock_gate.dart';
@@ -17,6 +21,13 @@ class MentosApp extends ConsumerWidget {
     final mode = ref.watch(themeModeProvider);
     final session = ref.watch(sessionProvider);
     final router = ref.watch(routerProvider);
+    ref.watch(notificationServiceProvider);
+    ref.watch(keepAliveProvider);
+    // Payments and live streams listen for messages from the moment the
+    // session opens, not only while their screens are visible.
+    ref.watch(paymentsProvider);
+    ref.watch(liveManagerProvider);
+    ref.watch(callManagerProvider);
     final light = buildTheme(Palette.light);
     final dark = buildTheme(Palette.dark);
     // Keep the navigator out of the tree until the node is open so Feed/You
@@ -52,7 +63,12 @@ class MentosApp extends ConsumerWidget {
         final reduce = ref.watch(settingsProvider).reduceMotion;
         final media = MediaQuery.of(context);
         final body = session is SessionReady
-            ? LockGate(child: AlertHost(router: router, child: child ?? const SizedBox.shrink()))
+            ? LockGate(
+                child: CallHost(
+                  router: router,
+                  child: AlertHost(router: router, child: child ?? const SizedBox.shrink()),
+                ),
+              )
             : (child ?? const SizedBox.shrink());
         return MediaQuery(
           data: media.copyWith(disableAnimations: media.disableAnimations || reduce),

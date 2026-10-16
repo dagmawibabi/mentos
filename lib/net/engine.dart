@@ -82,10 +82,52 @@ class Engine {
   final _alerts = <String, Alert>{};
   final _jobs = <String, Job>{};
   final _invites = <String, Map<String, dynamic>>{};
-  final _outgoingInvites = <String, Set<String>>{};
+  /// Group id -> invited node -> when. Kept on disk so an acceptance that
+  /// arrives after a restart still admits the person.
+  final _outgoingInvites = <String, Map<String, int>>{};
+  static const _inviteTtl = Duration(days: 14);
   final _peerBps = <String, int>{};
 
   final _changes = StreamController<Set<String>>.broadcast();
+  final _notes = StreamController<OsNote>.broadcast();
+
+  /// Everything that may deserve an operating-system notification. The
+  /// listener decides, using the person's notification settings.
+  Stream<OsNote> get notes => _notes.stream;
+
+  final _callSignals = StreamController<({String from, Map<String, dynamic> m})>.broadcast();
+  final _appMessages = StreamController<({String from, String app, Map<String, dynamic> m})>.broadcast();
+
+  /// Messages for features built on the engine (payments), from the
+  /// authenticated direct channel.
+  Stream<({String from, String app, Map<String, dynamic> m})> get appMessages => _appMessages.stream;
+
+  /// Sends [body] to [peer] for [app]. With [queueId] it is stored and
+  /// retried until delivered, like any other control message.
+  Future<bool> sendApp(String peer, String app, Map<String, dynamic> body, {String? queueId}) {
+    final msg = {'t': 'app', 'app': app, 'b': body};
+    return queueId == null ? _send(peer, msg) : _sendOrQueue(queueId, peer, msg);
+  }
+  final _media = StreamController<MediaEvent>.broadcast();
+
+  /// Call signalling received over the authenticated direct channel.
+  Stream<({String from, Map<String, dynamic> m})> get callSignals => _callSignals.stream;
+
+  /// Media connections opening and closing.
+  Stream<MediaEvent> get mediaEvents => _media.stream;
+
+  /// Sends a call control message now; calls are real time, so nothing is
+  /// queued for later.
+  Future<bool> sendCallSignal(String peer, Map<String, dynamic> body) => _send(peer, {...body, 't': 'call'});
+
+  /// Records something for the person's activity feed and notifications.
+  void noteActivity(Activity a, {String? title, String? body, String? route, String category = 'other'}) {
+    db.addActivity(a);
+    _emit({Ch.activity});
+    if (title != null) {
+      _notify(id: a.id, title: title, body: body ?? '', route: route, category: category, at: a.ts);
+    }
+  }
   final _pending = <String>{};
   Timer? _flush;
   final _subs = <StreamSubscription>[];
@@ -144,7 +186,9 @@ class Engine {
     db.recoverDeliveries();
     await _loadTombstones();
     _loadInvites();
+    _loadOutgoingInvites();
     _bindStarted = DateTime.now();
+    _applyNetOptions();
     try {
       await net.start(
         secret: me.seed,
@@ -326,7 +370,17 @@ class Engine {
     _pending.clear();
   }
 
+  /// Last refusal from the native node for the privacy options, if any.
+  String? netOptionsError;
+
+  void _applyNetOptions() {
+    final Object tools = net;
+    if (tools is! NetTools) return;
+    netOptionsError = tools.setOptions(_settings.netOptions);
+  }
+
   void updateSettings(Settings s) {
+    final rebind = s.privacy != _settings.privacy || (s.privacy == 'tor' && s.proxyUrl != _settings.proxyUrl);
     final profileChanged =
         s.keepPosts != _settings.keepPosts ||
         s.keepProfile != _settings.keepProfile ||
@@ -339,6 +393,15 @@ class Engine {
       unawaited(updateProfile(name: p.name, bio: p.bio, avatar: p.avatar));
       if (!s.keepPosts) unawaited(_broadcastRevoke(Scope.feed(me.id)));
     }
+    if (rebind && _running) unawaited(_rebind());
+  }
+
+  /// Privacy modes change which transports the endpoint binds, so the node
+  /// restarts with the new options.
+  Future<void> _rebind() async {
+    final wasHeld = _held;
+    await disconnectNode();
+    if (!wasHeld) await connectNode();
   }
 
   void _emit(Iterable<String> keys) {
@@ -526,6 +589,8 @@ class Engine {
         if (msg != null) await _onDirect(from, msg);
       case GossipEvent(:final topic, :final from, :final data):
         await _onGossip(topic, from, data);
+      case MediaEvent():
+        _media.add(ev);
       case NeighborEvent(:final topic, :final peer, :final up):
         final set = _neighbors.putIfAbsent(topic, () => <String>{});
         up ? set.add(peer) : set.remove(peer);
@@ -901,6 +966,14 @@ class Engine {
         if (e != null) await ingest(e, via: from);
       case 'ginvite':
         await _onGroupInvite(from, m);
+      case 'call':
+        if (!(db.peer(from)?.blocked ?? false)) _callSignals.add((from: from, m: m));
+      case 'app':
+        final app = m['app'];
+        final body = m['b'];
+        if (app is String && body is Map && !(db.peer(from)?.blocked ?? false)) {
+          _appMessages.add((from: from, app: app, m: body.cast<String, dynamic>()));
+        }
       case 'gkey':
         final gid = m['id'] as String? ?? '';
         final key = m['key'] as String? ?? '';
@@ -938,10 +1011,13 @@ class Engine {
         final gid = m['id'] as String? ?? '';
         final g = db.group(gid);
         final pending = _outgoingInvites[gid];
-        if (g != null &&
-            g.owner == me.id &&
-            pending != null &&
-            pending.remove(from)) {
+        final invitedAt = pending?[from];
+        final fresh = invitedAt != null && nowMs() - invitedAt < _inviteTtl.inMilliseconds;
+        if (invitedAt != null) {
+          pending!.remove(from);
+          _saveOutgoingInvites();
+        }
+        if (g != null && g.owner == me.id && fresh) {
           await updateGroup(
             gid,
             (x) => x.copyWith(members: {...x.members, from}.toList()),
@@ -1638,14 +1714,54 @@ class Engine {
           _setTyping(e.scope, e.author, false);
         }
         if (e.author != me.id) {
+          final text = (e.body['text'] as String?)?.trim() ?? '';
+          final gid = type == 'gdm' ? Scope.parts(e.scope).elementAtOrNull(1) : null;
+          final group = gid == null ? null : db.group(gid);
           _notify(
+            at: e.ts,
             id: 'msg:${e.id}',
-            title: nameOf(e.author),
-            body: (e.body['text'] as String?)?.trim().isNotEmpty == true
-                ? e.body['text'] as String
-                : 'New message',
-            route: type == 'dm' ? '/chat/${e.author}' : '/chats',
+            title: group == null ? nameOf(e.author) : '${nameOf(e.author)} · ${group.name}',
+            body: text.isNotEmpty ? text : 'New message',
+            route: type == 'dm' ? '/chat/${e.author}' : (gid != null ? '/g/$gid' : '/chats'),
             scope: e.scope,
+            category: type == 'dm' ? 'dm' : (mentionsMe(text) ? 'mention' : 'group'),
+          );
+        }
+      case K.story:
+        if (e.author != me.id && (db.peer(e.author)?.iFollow ?? false)) {
+          _notify(
+            at: e.ts,
+            id: 'story:${e.id}',
+            title: nameOf(e.author),
+            body: 'Posted a story',
+            route: '/story/${e.author}',
+            category: 'story',
+          );
+        }
+      case K.post:
+        final owner = Scope.bcastOwner(e.scope);
+        final text = (e.body['text'] as String?)?.trim() ?? '';
+        if (e.author != me.id && owner != null) {
+          final chan = Scope.parts(e.scope).elementAtOrNull(2) ?? '';
+          if (e.body['silent'] == true || !isSubscribed(owner, chan)) break;
+          _notify(
+            at: e.ts,
+            id: 'chan:${e.id}',
+            title: nameOf(e.author),
+            body: text.isNotEmpty ? text : 'New post in a channel',
+            route: '/ch/$owner/$chan',
+            scope: e.scope,
+            category: 'channel',
+          );
+        } else if (e.author != me.id && mentionsMe(text)) {
+          _notify(
+            at: e.ts,
+            id: 'mention:${e.id}',
+            title: nameOf(e.author),
+            body: text,
+            route: '/post/${e.id}',
+            scope: e.scope,
+            category: 'mention',
           );
         }
       case K.comment:
@@ -1662,6 +1778,7 @@ class Engine {
             ),
           );
           _notify(
+            at: e.ts,
             id: 'act:${e.id}',
             title: nameOf(e.author),
             body: (e.body['text'] as String?)?.trim().isNotEmpty == true
@@ -1669,8 +1786,32 @@ class Engine {
                 : 'Replied to your post',
             route: '/activity',
             scope: e.scope,
+            category: 'reply',
           );
           _emit({Ch.activity});
+        }
+      case K.like when e.body['sub'] == true:
+        final target = e.target;
+        final chan = target == null ? null : db.item(target);
+        if (Scope.postAuthor(e.scope) == me.id && chan != null && chan.owned && chan.e.kind == K.chan && e.body['on'] != false) {
+          db.addActivity(Activity(
+            id: 'sub:${e.author}:$target',
+            kind: 'subscribe',
+            actor: e.author,
+            ref: target,
+            scope: e.scope,
+            text: chan.body['name'] as String?,
+            ts: e.ts,
+          ));
+          _notify(
+            at: e.ts,
+            id: 'sub:${e.author}:$target',
+            title: nameOf(e.author),
+            body: 'Subscribed to ${chan.body['name'] ?? 'your channel'}',
+            route: '/ch/${me.id}/$target',
+            category: 'follow',
+          );
+          _emit({Ch.activity, Ch.channels});
         }
       case K.like:
         if (Scope.postAuthor(e.scope) == me.id && e.body['on'] != false) {
@@ -1688,6 +1829,7 @@ class Engine {
               ),
             );
             _notify(
+              at: e.ts,
               id: 'like:${e.author}:$target',
               title: nameOf(e.author),
               body: 'Liked your post',
@@ -1696,6 +1838,29 @@ class Engine {
             );
             _emit({Ch.activity});
           }
+        }
+      case K.react when type == 'story':
+        final target = e.target;
+        if (target != null && Scope.parts(e.scope).elementAtOrNull(1) == me.id && e.body['on'] != false) {
+          final emoji = e.body['emoji'] is String ? e.body['emoji'] as String : '';
+          db.addActivity(Activity(
+            id: 'sreact:${e.author}:$target',
+            kind: 'react',
+            actor: e.author,
+            ref: target,
+            scope: e.scope,
+            text: emoji,
+            ts: e.ts,
+          ));
+          _notify(
+            at: e.ts,
+            id: 'sreact:${e.author}:$target:$emoji',
+            title: nameOf(e.author),
+            body: 'Reacted $emoji to your story',
+            route: '/story/${me.id}',
+            category: 'like',
+          );
+          _emit({Ch.activity, Ch.stories});
         }
       case K.react:
         final target = e.target;
@@ -2024,6 +2189,10 @@ class Engine {
         final peer = Scope.dmPeer(e.scope, me.id);
         if (peer == null) return;
         await _sendOrQueue(e.id, peer, wire);
+      case 'story' when parts.length > 1 && parts[1] != me.id:
+        // Likes, views and reactions on someone else's story go to that
+        // author, not to this person's own followers.
+        await _sendOrQueue(e.id, parts[1], wire);
       case 'feed' || 'story' || 'profile' || 'files' || 'bcast':
         if (!_settings.discoverable) {
           await _queueFanout(
@@ -2137,6 +2306,8 @@ class Engine {
     bool nsfw = false,
     String? channelId,
     String? bcastId,
+    bool silent = false,
+    Map<String, Object?>? live,
   }) {
     final scope = bcastId != null
         ? Scope.bcast(me.id, bcastId)
@@ -2153,13 +2324,15 @@ class Engine {
     return _publish(K.post, scope, {
       'text': text,
       if (title.isNotEmpty) 'title': title,
-      if (boardId != null) 'board': boardId,
-      if (channelId != null) 'channel': channelId,
+      'board': ?boardId,
+      'channel': ?channelId,
       if (media.isNotEmpty) 'media': media.map((m) => m.toJson()).toList(),
       'poll': ?poll?.toJson(),
       'repost': ?repost,
       if (ai) 'ai': true,
       if (nsfw) 'nsfw': true,
+      if (silent) 'silent': true,
+      'live': ?live,
     }, keep: k);
   }
 
@@ -2189,12 +2362,20 @@ class Engine {
     );
   }
 
-  Future<void> storyReply(Item s, String text) => _publish(
-    K.comment,
-    s.e.scope,
-    {'text': text.trim(), 'target': s.id, 'replyTo': s.id},
-    keep: _settings.keepReplies,
+  /// Replies to a story land in the author's DMs, like Instagram, with a
+  /// reference to the story so the chat can show what was answered.
+  Future<void> storyReply(Item s, String text, {String? prompt}) => sendMessage(
+    Scope.dm(me.id, s.author),
+    text: text.trim(),
+    story: {
+      'id': s.id,
+      'a': s.author,
+      if (s.body['text'] is String) 'text': _clip(s.body['text'] as String, 120),
+      'prompt': ?prompt,
+    },
   );
+
+  static String _clip(String s, int n) => s.length <= n ? s : '${s.substring(0, n)}…';
 
   Future<void> recordView(Item item) async {
     if (item.author == me.id) return;
@@ -2207,7 +2388,8 @@ class Engine {
           ? item.e.scope
           : Scope.post(item.author, item.id),
       {'target': item.id},
-      keep: false,
+      // Same consent as likes: lets the author keep the count across restarts.
+      keep: _settings.keepReplies,
     );
   }
 
@@ -2236,9 +2418,11 @@ class Engine {
     MediaRef? media,
     int color = 0,
     bool nsfw = false,
+    List<StorySticker> stickers = const [],
   }) => _publish(K.story, Scope.story(me.id), {
     'text': ?text,
     if (media != null) 'media': [media.toJson()],
+    if (stickers.isNotEmpty) 'stk': [for (final s in stickers) s.toJson()],
     'color': color,
     if (nsfw) 'nsfw': true,
     'exp': nowMs() + const Duration(hours: 24).inMilliseconds,
@@ -2252,6 +2436,7 @@ class Engine {
     Poll? poll,
     bool forwarded = false,
     bool nsfw = false,
+    Map<String, dynamic>? story,
   }) {
     final keep = switch (Scope.type(scope)) {
       'dm' => true,
@@ -2270,6 +2455,7 @@ class Engine {
       'poll': ?poll?.toJson(),
       if (forwarded) 'fwd': true,
       if (nsfw) 'nsfw': true,
+      'story': ?story,
       if (ttl > 0) 'exp': nowMs() + ttl * 1000,
     }, keep: keep);
   }
@@ -2880,6 +3066,7 @@ class Engine {
         ai: p.body['ai'] == true,
         nsfw: p.body['nsfw'] == true,
         views: (f.views[p.id] ?? const <String>{}).length,
+        viewers: p.author == me.id ? (f.views[p.id] ?? const <String>{}).toList() : const [],
         channelId:
             (p.body['channel'] is String ? p.body['channel'] as String : null) ??
             (const {'bcast', 'chan'}.contains(Scope.type(p.e.scope))
@@ -2900,7 +3087,18 @@ class Engine {
     return _postViews([i], db.bookmarkIds()).firstOrNull;
   }
 
+  /// False when the post is in a personal channel whose owner turned
+  /// comments off.
+  bool commentsOpen(PostView post) {
+    final owner = Scope.bcastOwner(post.item.e.scope);
+    final chan = post.channelId;
+    if (owner == null || chan == null) return true;
+    final c = broadcasts(owner: owner).where((b) => b.id == chan).firstOrNull;
+    return c == null || channelState(c).comments;
+  }
+
   List<CommentView> comments(PostView post) {
+    if (!commentsOpen(post)) return const [];
     final all = items(post.scope).where((i) => i.e.kind == K.comment).toList();
     final targets = {for (final c in all) c.id: c};
     final f = fold(
@@ -3145,6 +3343,10 @@ class Engine {
     return (owned: c['owned']!, kept: c['kept']!, live: _mem.length);
   }
 
+  /// Items held only in memory: visible while their author is reachable,
+  /// never written to disk.
+  List<Item> liveItems() => [for (final m in _mem.values) m.item];
+
   int liveItemsFrom(String peer) =>
       _mem.values.where((m) => m.item.author == peer).length;
   Map<String, int> keptByAuthor() => db.keptByAuthor();
@@ -3158,6 +3360,16 @@ class Engine {
       db.grants().where((g) => g.dir == GrantDir.inbound).toList();
 
   Map<String, Set<String>> get neighbors => _neighbors;
+
+  /// Gossip topic id -> what it carries, for the explorers.
+  Map<String, String> topicLabels() => {
+        for (final e in _spaceTopics.entries) e.key: 'space · ${db.space(e.value)?.name ?? shortId(e.value)}',
+        for (final e in _feedTopics.entries) e.key: 'posts · ${nameOf(e.value)}',
+        for (final e in _groupTopics.entries) e.key: 'group · ${db.group(e.value)?.name ?? shortId(e.value)}',
+      };
+
+  /// When [peer] was last heard from on any path, ms since epoch.
+  int lastHeardFrom(String peer) => _lastHeard[peer] ?? 0;
   int get topicCount =>
       _spaceTopics.length + _feedTopics.length + _groupTopics.length;
 
@@ -3179,9 +3391,12 @@ class Engine {
       for (final i in hosted(a)) {
         final refs = MediaRef.listFrom(i.body['media']);
         final name = refs.firstOrNull?.name ?? '';
+        final meta = HostMeta.of(i);
         if (needle.isEmpty ||
             name.toLowerCase().contains(needle) ||
-            (i.body['note'] as String? ?? '').toLowerCase().contains(needle)) {
+            meta.note.toLowerCase().contains(needle) ||
+            meta.folder.toLowerCase().contains(needle) ||
+            meta.tags.any((t) => t.contains(needle.replaceFirst('#', '')))) {
           out.add(i);
         }
       }
@@ -3192,11 +3407,16 @@ class Engine {
   Future<Item> hostFile(
     MediaRef ref, {
     String note = '',
+    String folder = '',
+    List<String> tags = const [],
     bool keep = true,
   }) async {
+    final cleanTags = HostMeta.cleanTags(tags);
     final e = await _publish(K.host, Scope.files(me.id), {
       'media': [ref.toJson()],
-      if (note.isNotEmpty) 'note': note,
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+      if (folder.trim().isNotEmpty) 'folder': folder.trim(),
+      if (cleanTags.isNotEmpty) 'tags': cleanTags,
     }, keep: keep);
     _emit({Ch.files, Scope.files(me.id)});
     return Item(e, owned: true, kept: false);
@@ -3212,14 +3432,21 @@ class Engine {
   }) async {
     final refs = MediaRef.listFrom(item.body['media']);
     if (refs.isEmpty) return null;
-    return media.open(
+    final f = await media.open(
       refs.first,
       sources: sourcesFor(item),
       origin: 'cache',
       scope: item.e.scope,
       onProgress: onProgress,
     );
+    // A completed download counts once for the host, like a view.
+    if (f != null) unawaited(recordView(item));
+    return f;
   }
+
+  /// How many people downloaded a hosted file, as far as this device knows.
+  /// Exact for your own files.
+  int hostDownloads(Item item) => (fold(_mutationsFor([item.id]), {item.id: item}).views[item.id] ?? const {}).length;
 
   Future<GroupInfo> createGroup(String name, List<String> memberIds) async {
     final g = GroupInfo(
@@ -3330,18 +3557,62 @@ class Engine {
       _emit({Ch.xfers});
       return;
     }
-    x.state = XferState.active;
+    x.state = XferState.queued;
+    x.error = null;
     _emit({Ch.xfers});
     final ok = await _send(x.peer, {'t': 'xfer', 'op': 'accept', 'id': id});
     if (!ok) {
-      if (x.state == XferState.active) {
+      if (x.state == XferState.queued) {
         x.state = XferState.failed;
         x.error = 'could not reach them';
         _emit({Ch.xfers});
       }
       return;
     }
-    unawaited(_runInbound(x));
+    _pumpInbound();
+  }
+
+  /// Starts queued downloads while fewer than the configured number run.
+  void _pumpInbound() {
+    final limit = _settings.xferParallel.clamp(1, 8);
+    var running = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.active).length;
+    final waiting = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.queued).toList()
+      ..sort((a, b) => a.started.compareTo(b.started));
+    for (final x in waiting) {
+      if (running >= limit) break;
+      running++;
+      x.state = XferState.active;
+      unawaited(_runInbound(x).whenComplete(_pumpInbound));
+    }
+    _emit({Ch.xfers});
+  }
+
+  /// Tries a failed or cancelled transfer again: downloads restart, and an
+  /// offer that never reached them is sent again.
+  Future<void> retryTransfer(String id) async {
+    final x = _xfers[id];
+    if (x == null || !{XferState.failed, XferState.cancelled}.contains(x.state)) return;
+    x.error = null;
+    x.done = 0;
+    if (x.dir == XferDir.inbound) {
+      x.state = XferState.offer;
+      await respondTransfer(id, true);
+      return;
+    }
+    x.state = XferState.offer;
+    _emit({Ch.xfers});
+    final ok = await _send(x.peer, {'t': 'xfer', 'op': 'offer', 'id': x.id, 'media': x.media.toJson()});
+    if (!ok && x.state == XferState.offer) {
+      x.state = XferState.failed;
+      x.error = 'could not reach them';
+    }
+    _emit({Ch.xfers});
+  }
+
+  /// Forgets finished, failed, declined and cancelled transfers.
+  void clearFinishedTransfers() {
+    _xfers.removeWhere((_, x) => !x.moving);
+    _emit({Ch.xfers});
   }
 
   Future<void> cancelTransfer(String id) async {
@@ -3361,7 +3632,11 @@ class Engine {
     switch (op) {
       case 'offer':
         final media = MediaRef.fromJson(m['media']);
-        if (media == null) return;
+        if (media == null || id.isEmpty || id.length > 80) return;
+        if (db.peer(from)?.blocked ?? false) return;
+        // A re-sent offer for a transfer already moving here is ignored.
+        final prior = _xfers[id];
+        if (prior != null && (prior.peer != from || prior.moving)) return;
         _xfers[id] = FileTransfer(
           id: id,
           peer: from,
@@ -3379,6 +3654,14 @@ class Engine {
             ts: nowMs(),
           ),
         );
+        final auto = _settings.xferAutoAccept &&
+            (db.peer(from)?.iFollow ?? false) &&
+            media.size <= _settings.xferAutoMaxMb * 1024 * 1024;
+        if (auto) {
+          _emit({Ch.xfers, Ch.activity});
+          unawaited(respondTransfer(id, true));
+          return;
+        }
         pushAlert(
           Alert(
             id: 'xfer:$id',
@@ -3502,7 +3785,18 @@ class Engine {
     String? scope,
     double? progress,
     String? cancelId,
+    String? category,
+    int? at,
   }) {
+    _notes.add(OsNote(
+      id: id,
+      at: at ?? nowMs(),
+      category: category ?? _categoryOf(id, kind),
+      title: title,
+      body: body,
+      route: route,
+      scope: scope,
+    ));
     if (kind != 'xfer') return;
     if (!_settings.systemNotify) return;
     if (scope != null && db.chat(scope)['muted'] == 1) return;
@@ -3521,6 +3815,27 @@ class Engine {
       cancelId: cancelId,
     );
     _emit({Ch.alerts});
+  }
+
+  static String _categoryOf(String id, String kind) {
+    if (kind == 'xfer' || kind == 'invite') return kind;
+    final prefix = id.split(':').first;
+    return switch (prefix) {
+      'follow' => 'follow',
+      'like' => 'like',
+      'act' => 'reply',
+      'sync' => 'invite',
+      'ginvite' => 'invite',
+      _ => 'other',
+    };
+  }
+
+  /// True when [text] names this person with an @, by display name or alias.
+  bool mentionsMe(String text) {
+    if (!text.contains('@')) return false;
+    final lower = text.toLowerCase();
+    final names = {myProfile.name.trim().toLowerCase(), alias(me.id)}..remove('');
+    return names.any((n) => lower.contains('@$n') || lower.contains('@${n.replaceAll(' ', '')}'));
   }
 
   int peerBps(String id) => _peerBps[id] ?? 0;
@@ -3556,6 +3871,67 @@ class Engine {
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // channels
+
+  Set<String> _chanSubs() {
+    try {
+      final raw = db.getKv('chansubs');
+      return raw == null ? <String>{} : {for (final x in jsonDecode(raw) as List) if (x is String) x};
+    } catch (_) {
+      return <String>{};
+    }
+  }
+
+  /// Your own channels count as subscribed.
+  bool isSubscribed(String owner, String channelId) => owner == me.id || _chanSubs().contains('$owner/$channelId');
+
+  /// Subscribing follows the owner (their posts travel on their feed topic)
+  /// and sends them a signed subscription they can count.
+  Future<void> subscribe(Bcast c, bool on) async {
+    final subs = _chanSubs();
+    on ? subs.add('${c.owner}/${c.id}') : subs.remove('${c.owner}/${c.id}');
+    db.setKv('chansubs', jsonEncode(subs.toList()));
+    if (on && !(db.peer(c.owner)?.iFollow ?? false)) await follow(c.owner, true);
+    await _publish(K.like, Scope.post(c.owner, c.id), {'target': c.id, 'on': on, 'sub': true}, keep: true);
+    _emit({Ch.channels, Ch.chats});
+  }
+
+  /// People whose latest subscription to [c] is on. Exact for your own
+  /// channels; for others it is what has reached this device.
+  Set<String> subscribers(Bcast c) {
+    final latest = <String, Item>{};
+    for (final m in _mutationsFor([c.id])) {
+      if (m.e.kind != K.like || m.body['sub'] != true) continue;
+      final prev = latest[m.author];
+      if (prev == null || m.ts >= prev.ts) latest[m.author] = m;
+    }
+    return {for (final x in latest.entries) if (x.value.body['on'] != false) x.key};
+  }
+
+  /// Owner-controlled state: pinned post and whether comments are open.
+  ({String? pinned, bool comments}) channelState(Bcast c) {
+    Item? last;
+    for (final m in _mutationsFor([c.id])) {
+      if (m.e.kind != K.edit || m.author != c.owner || m.body['chan'] != true) continue;
+      if (last == null || m.ts >= last.ts) last = m;
+    }
+    final b = last?.body ?? const <String, dynamic>{};
+    return (pinned: b['pin'] is String ? b['pin'] as String : null, comments: b['comments'] != false);
+  }
+
+  Future<void> setChannelState(Bcast c, {String? pinned, required bool comments}) async {
+    if (c.owner != me.id) throw StateError('Only the owner changes a channel');
+    await _publish(K.edit, Scope.feed(me.id), {
+      'target': c.id,
+      'chan': true,
+      'text': '',
+      'pin': ?pinned,
+      'comments': comments,
+    }, keep: true);
+    _emit({Ch.channels, Scope.bcast(me.id, c.id)});
+  }
+
   List<PostView> channelFeed({
     required String owner,
     required String channelId,
@@ -3580,7 +3956,8 @@ class Engine {
     final g = db.group(groupId);
     if (g == null || g.owner != me.id) return;
     for (final id in ids.where((id) => id != me.id && !g.has(id))) {
-      (_outgoingInvites[g.id] ??= {}).add(id);
+      (_outgoingInvites[g.id] ??= {})[id] = nowMs();
+      _saveOutgoingInvites();
       await _sendOrQueue('ginvite:${g.id}:$id', id, {
         't': 'ginvite',
         'id': g.id,
@@ -3641,6 +4018,38 @@ class Engine {
 
   void _saveInvites() {
     db.setKv('ginvites', jsonEncode(_invites));
+  }
+
+  void _loadOutgoingInvites() {
+    try {
+      final raw = db.getKv('goutvites');
+      if (raw == null) return;
+      final cutoff = nowMs() - _inviteTtl.inMilliseconds;
+      for (final g in (jsonDecode(raw) as Map).entries) {
+        if (g.value is! Map) continue;
+        final peers = <String, int>{
+          for (final p in (g.value as Map).entries)
+            if (p.value is num && (p.value as num) > cutoff) '${p.key}': (p.value as num).toInt(),
+        };
+        if (peers.isNotEmpty) _outgoingInvites['${g.key}'] = peers;
+      }
+    } catch (_) {}
+  }
+
+  void _saveOutgoingInvites() {
+    _outgoingInvites.removeWhere((_, v) => v.isEmpty);
+    db.setKv('goutvites', jsonEncode(_outgoingInvites));
+  }
+
+  /// People invited to [groupId] who have not answered yet.
+  List<String> pendingInvites(String groupId) => (_outgoingInvites[groupId] ?? const {}).keys.toList();
+
+  /// Withdraws an invitation; a later acceptance is ignored.
+  void revokeGroupInvite(String groupId, String peer) {
+    _outgoingInvites[groupId]?.remove(peer);
+    _saveOutgoingInvites();
+    db.deleteOutbox('ginvite:$groupId:$peer');
+    _emit({Ch.groups});
   }
 
   Future<void> respondGroupInvite(String id, bool accept) async {
@@ -3776,6 +4185,7 @@ class Engine {
       if (!current.running && _dataDir != null && !_bindInFlight) {
         _bindStarted = DateTime.now();
         _meshJoined = false;
+        _applyNetOptions();
         try {
           await net.start(
             secret: me.seed,

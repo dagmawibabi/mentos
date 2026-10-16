@@ -120,8 +120,9 @@ class Envelope {
       case K.profile:
         return scope == Scope.profile(author);
       case K.msg:
-      case K.react:
         return chats.contains(type);
+      case K.react:
+        return chats.contains(type) || type == 'story';
       case K.post:
         return posts.contains(type);
       case K.comment:
@@ -239,6 +240,40 @@ class Envelope {
     if (reply != null && reply is! String) return false;
     final emoji = body['emoji'];
     if (emoji != null && (emoji is! String || emoji.length > 32)) return false;
+    final stickers = body['stk'];
+    if (stickers != null) {
+      if (kind != K.story || stickers is! List || stickers.length > StorySticker.max) return false;
+      for (final st in stickers) {
+        if (StorySticker.fromJson(st) == null) return false;
+      }
+    }
+    final live = body['live'];
+    if (live != null) {
+      if (kind != K.post || Scope.type(scope) != 'bcast' || live is! Map) return false;
+      final id = live['id'];
+      if (id is! String || !RegExp(r'^[A-Za-z0-9_-]{8,40}$').hasMatch(id)) return false;
+      if (live['video'] != null && live['video'] is! bool) return false;
+    }
+    if (kind == K.host) {
+      final note = body['note'];
+      if (note != null && (note is! String || note.length > 1000)) return false;
+      final folder = body['folder'];
+      if (folder != null && (folder is! String || folder.length > 60)) return false;
+      final tags = body['tags'];
+      if (tags != null) {
+        if (tags is! List || tags.length > HostMeta.maxTags) return false;
+        if (tags.any((t) => t is! String || t.isEmpty || t.length > 32)) return false;
+      }
+    }
+    final story = body['story'];
+    if (story != null) {
+      if (kind != K.msg || story is! Map) return false;
+      if (story['id'] is! String || story['a'] is! String) return false;
+      final t = story['text'];
+      if (t != null && (t is! String || t.length > 200)) return false;
+      final q = story['prompt'];
+      if (q != null && (q is! String || q.length > 200)) return false;
+    }
     return true;
   }
 
@@ -803,7 +838,7 @@ class GroupInfo {
 
 enum XferDir { out, inbound }
 
-enum XferState { offer, active, done, failed, declined, cancelled }
+enum XferState { offer, queued, active, done, failed, declined, cancelled }
 
 class FileTransfer {
   FileTransfer({
@@ -831,7 +866,7 @@ class FileTransfer {
 
   int get total => media.size;
   double get progress => total <= 0 ? 0 : (done / total).clamp(0, 1);
-  bool get moving => state == XferState.offer || state == XferState.active;
+  bool get moving => state == XferState.offer || state == XferState.queued || state == XferState.active;
 
   void bump(int n) {
     final now = nowMs();
@@ -918,3 +953,133 @@ String alias(String id) {
 }
 
 String shortId(String id) => id.length > 12 ? '${id.substring(0, 6)}…${id.substring(id.length - 4)}' : id;
+
+/// Something that may become an operating-system notification.
+class OsNote {
+  const OsNote({
+    required this.id,
+    required this.category,
+    required this.title,
+    required this.body,
+    required this.at,
+    this.route,
+    this.scope,
+  });
+
+  final String id;
+
+  /// dm | group | mention | reply | like | follow | invite | xfer | story | channel | other
+  final String category;
+  final String title;
+  final String body;
+
+  /// When the underlying event happened, ms since epoch.
+  final int at;
+  final String? route;
+  final String? scope;
+}
+
+enum StickerKind { emoji, text, link, mention, ask }
+
+/// Something placed on a story. Position is a fraction of the story's width
+/// and height so it lands in the same place on every screen.
+class StorySticker {
+  const StorySticker({
+    required this.kind,
+    required this.value,
+    this.x = .5,
+    this.y = .5,
+    this.scale = 1,
+    this.label,
+  });
+
+  static const max = 12;
+
+  final StickerKind kind;
+
+  /// Emoji, text, URL, mentioned node id, or the question asked.
+  final String value;
+  final double x;
+  final double y;
+  final double scale;
+
+  /// Shown instead of the raw URL for links, or a name for mentions.
+  final String? label;
+
+  StorySticker copyWith({double? x, double? y, double? scale}) =>
+      StorySticker(kind: kind, value: value, x: x ?? this.x, y: y ?? this.y, scale: scale ?? this.scale, label: label);
+
+  Map<String, Object> toJson() => {
+        't': kind.name,
+        'v': value,
+        'x': double.parse(x.toStringAsFixed(3)),
+        'y': double.parse(y.toStringAsFixed(3)),
+        if (scale != 1) 's': double.parse(scale.toStringAsFixed(2)),
+        if (label != null && label!.isNotEmpty) 'l': label!,
+      };
+
+  /// Null for anything a renderer should not trust.
+  static StorySticker? fromJson(Object? j) {
+    if (j is! Map) return null;
+    final kind = StickerKind.values.asNameMap()[j['t']];
+    final v = j['v'];
+    if (kind == null || v is! String || v.isEmpty || v.length > 300) return null;
+    double frac(Object? n, double d) => n is num && n.isFinite ? n.toDouble().clamp(0.0, 1.0) : d;
+    final s = j['s'];
+    final label = j['l'];
+    if (label != null && (label is! String || label.length > 80)) return null;
+    switch (kind) {
+      case StickerKind.emoji:
+        if (v.length > 16) return null;
+      case StickerKind.link:
+        final u = Uri.tryParse(v);
+        if (u == null || !(u.scheme == 'https' || u.scheme == 'http') || u.host.isEmpty) return null;
+      case StickerKind.mention:
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(v)) return null;
+      case StickerKind.text || StickerKind.ask:
+        if (v.length > 200) return null;
+    }
+    return StorySticker(
+      kind: kind,
+      value: v,
+      x: frac(j['x'], .5),
+      y: frac(j['y'], .5),
+      scale: s is num && s.isFinite ? s.toDouble().clamp(.5, 3.0) : 1,
+      label: label as String?,
+    );
+  }
+
+  static List<StorySticker> listFrom(Object? j) =>
+      j is List ? j.map(fromJson).whereType<StorySticker>().take(max).toList() : const [];
+}
+
+/// Description, folder and tags a host attached to a hosted file.
+class HostMeta {
+  const HostMeta({this.note = '', this.folder = '', this.tags = const []});
+  static const maxTags = 8;
+
+  final String note;
+  final String folder;
+  final List<String> tags;
+
+  static HostMeta of(Item i) => HostMeta(
+        note: i.body['note'] is String ? i.body['note'] as String : '',
+        folder: i.body['folder'] is String ? i.body['folder'] as String : '',
+        tags: [for (final t in (i.body['tags'] is List ? i.body['tags'] as List : const [])) if (t is String) t],
+      );
+
+  /// Lowercase, no '#', no spaces, unique, at most [maxTags].
+  static List<String> cleanTags(Iterable<String> raw) {
+    final out = <String>[];
+    for (final t in raw) {
+      final c = t.trim().toLowerCase().replaceAll('#', '').replaceAll(RegExp(r'\s+'), '-');
+      if (c.isEmpty || c.length > 32 || out.contains(c)) continue;
+      out.add(c);
+      if (out.length == maxTags) break;
+    }
+    return out;
+  }
+
+  /// "travel, #Photos 2024" -> [travel, photos-2024]
+  static List<String> parseTags(String input) => cleanTags(input.split(RegExp(r'[,\n]')));
+}

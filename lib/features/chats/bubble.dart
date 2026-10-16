@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
@@ -111,6 +112,7 @@ class Bubble extends ConsumerWidget {
               ],
             ),
           ),
+        if (m.item.body['story'] is Map) _StoryRef(ref: (m.item.body['story'] as Map).cast<String, dynamic>(), mine: mine, fg: fg),
         if (m.replyTo != null)
           GestureDetector(
             onTap: onTapReply,
@@ -517,6 +519,56 @@ class _TypingDotsState extends State<TypingDots>
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Header on a message that answers a story or a story question.
+class _StoryRef extends StatelessWidget {
+  const _StoryRef({required this.ref, required this.mine, required this.fg});
+  final Map<String, dynamic> ref;
+  final bool mine;
+  final Color fg;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final prompt = ref['prompt'] is String ? ref['prompt'] as String : null;
+    final text = ref['text'] is String ? ref['text'] as String : null;
+    final author = ref['a'] is String ? ref['a'] as String : '';
+    return GestureDetector(
+      onTap: author.isEmpty ? null : () => GoRouter.of(context).push('/story/$author'),
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+        decoration: BoxDecoration(
+          color: fg.withValues(alpha: .07),
+          borderRadius: BorderRadius.circular(12),
+          border: Border(left: BorderSide(color: p.accent, width: 2.5)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(prompt != null ? Icons.help_outline_rounded : Icons.amp_stories_outlined, size: 13, color: fg.withValues(alpha: .7)),
+                const SizedBox(width: 4),
+                Text(
+                  prompt != null ? 'Answered a question' : (mine ? 'Replied to their story' : 'Replied to your story'),
+                  style: Txt.mono(fg.withValues(alpha: .7), size: 10.5),
+                ),
+              ],
+            ),
+            if (prompt != null || (text != null && text.isNotEmpty))
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(prompt ?? text!, maxLines: 2, overflow: TextOverflow.ellipsis, style: Txt.small(fg.withValues(alpha: .85))),
+              ),
+          ],
+        ),
       ),
     );
   }

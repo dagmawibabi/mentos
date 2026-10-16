@@ -39,6 +39,14 @@ class NeighborEvent extends NetEvent {
 
 class StatusEvent extends NetEvent {}
 
+/// A call's media connection to [peer] opened or closed.
+class MediaEvent extends NetEvent {
+  MediaEvent(this.call, this.peer, this.up);
+  final String call;
+  final String peer;
+  final bool up;
+}
+
 enum LinkKind { direct, relay, mixed, none }
 
 class LinkInfo {
@@ -137,6 +145,45 @@ abstract class Transport {
   String blobPath(String hash);
 
   Future<NetStatus> status();
+}
+
+/// Optional tools a transport can offer for diagnostics and privacy. The
+/// offline and test transports do not implement it.
+abstract interface class NetTools {
+  /// A fresh measurement from the native node, or null when unavailable.
+  Future<Map<String, dynamic>?> diagnostics();
+
+  /// Round trip to [peer] in milliseconds, dialing if needed. Null on failure.
+  Future<double?> ping(String peer);
+
+  /// Privacy options applied the next time the node binds. Returns an error
+  /// message, or null on success.
+  String? setOptions(Map<String, Object?> options);
+
+  /// Tells iroh the device's network may have changed.
+  void networkChange();
+}
+
+/// Real-time media for calls: unreliable datagrams over a dedicated QUIC
+/// connection per participant. All calls are non-blocking.
+abstract interface class MediaLink {
+  /// Opens [call] and allows [peers] to connect to it.
+  bool callListen(String call, List<String> peers);
+
+  /// Connects to [peer]; a [MediaEvent] reports the result.
+  bool callDial(String call, String peer);
+
+  /// Sends one datagram to every connected participant; returns how many took it.
+  int callSend(String call, Uint8List data);
+
+  /// Next received packet, or null when nothing is waiting.
+  ({String peer, Uint8List data})? callRecv(String call);
+
+  /// Largest datagram every participant's path allows now, 0 if none connected.
+  int callMaxDatagram(String call);
+  void callDropPeer(String call, String peer);
+  void callClose(String call);
+  Map<String, dynamic>? callStats(String call);
 }
 
 /// Used when the native iroh library is not bundled. Everything works

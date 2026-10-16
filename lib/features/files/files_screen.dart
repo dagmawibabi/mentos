@@ -11,7 +11,6 @@ import '../../data/models.dart';
 import '../../state/providers.dart';
 import '../../widgets/media.dart';
 import '../../widgets/ui.dart';
-import '../common/attach.dart';
 import 'hosted_list.dart';
 
 enum _Filter { all, mine, kept, cache }
@@ -166,13 +165,8 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   Future<void> _host(BuildContext context) async {
     final e = ref.read(engineProvider);
-    final picked = await pickFiles(e.media);
-    if (picked.isEmpty) return;
-    for (final f in picked) {
-      final media = await importPending(e, f, scope: Scope.files(e.me.id));
-      await e.hostFile(media);
-    }
-    e.notifyFiles();
+    final n = await hostPickedFiles(context, e);
+    if (n == 0) return;
     await _refreshUsage();
     if (context.mounted) toast(context, 'Now hosting on your node');
   }

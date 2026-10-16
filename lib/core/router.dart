@@ -4,7 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import '../features/activity/activity_screen.dart';
 import '../features/bookmarks/bookmarks_screen.dart';
+import '../features/calls/call_screen.dart';
+import '../features/calls/live_screen.dart';
 import '../features/chats/chat_screen.dart';
+import '../features/data/data_explorer_screen.dart';
 import '../features/chats/chats_screen.dart';
 import '../features/connect/connect_screen.dart';
 import '../features/feed/compose_screen.dart';
@@ -16,16 +19,23 @@ import '../features/chats/group_screen.dart';
 import '../features/chats/new_group_screen.dart';
 import '../features/files/files_screen.dart';
 import '../features/files/transfer_screen.dart';
+import '../features/network/diagnostics_screen.dart';
 import '../features/network/network_screen.dart';
+import '../features/network/node_screen.dart';
+import '../features/network/privacy_screen.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/profile/edit_profile_screen.dart';
 import '../features/profile/insights_screen.dart';
 import '../features/profile/people_screen.dart';
 import '../features/profile/profile_screen.dart';
+import '../features/settings/accounts_screen.dart';
 import '../features/settings/backup_screen.dart';
+import '../features/settings/notifications_screen.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/shell/home_shell.dart';
 import '../features/spaces/broadcast_screen.dart';
+import '../features/spaces/channels_screen.dart';
+import '../features/wallet/wallet_screen.dart';
 import '../features/spaces/create_space_screen.dart';
 import '../features/spaces/forum_screen.dart';
 import '../features/spaces/space_screen.dart';
@@ -122,6 +132,26 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/s/:id/settings', builder: (_, s) => SpaceSettingsScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/connect', builder: (_, s) => ConnectScreen(scan: s.uri.queryParameters['scan'] == '1')),
+      GoRoute(
+        path: '/call',
+        parentNavigatorKey: _rootKey,
+        pageBuilder: (_, _) => const MaterialPage(fullscreenDialog: true, child: CallScreen()),
+      ),
+      GoRoute(
+        path: '/live',
+        parentNavigatorKey: _rootKey,
+        pageBuilder: (_, _) => const MaterialPage(fullscreenDialog: true, child: LiveScreen()),
+      ),
+      GoRoute(path: '/wallet', builder: (_, _) => const WalletScreen()),
+      GoRoute(path: '/wallet/:peer', builder: (_, s) => PeerWalletScreen(peer: s.pathParameters['peer']!)),
+      GoRoute(path: '/calls', builder: (_, _) => const CallLogScreen()),
+      GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),
+      GoRoute(path: '/channels', builder: (_, _) => const ChannelsScreen()),
+      GoRoute(path: '/notifications', builder: (_, _) => const NotificationsScreen()),
+      GoRoute(path: '/data', builder: (_, _) => const DataExplorerScreen()),
+      GoRoute(path: '/diagnostics', builder: (_, _) => const DiagnosticsScreen()),
+      GoRoute(path: '/privacy', builder: (_, _) => const PrivacyScreen()),
+      GoRoute(path: '/node/:id', builder: (_, s) => NodeScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
       GoRoute(path: '/backup', builder: (_, _) => const BackupScreen()),
       GoRoute(path: '/files', builder: (_, _) => const FilesScreen()),

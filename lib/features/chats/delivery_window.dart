@@ -10,6 +10,7 @@ import '../../data/models.dart';
 import '../../net/engine.dart';
 import '../../net/transport.dart';
 import '../../net/views.dart';
+import 'seen_by.dart';
 
 /// Milestones, not a fabricated byte-transfer percentage.
 int deliveryMilestone(Delivery state) => switch (state) {
@@ -294,6 +295,15 @@ class _MessageDeliveryWindowState extends State<MessageDeliveryWindow>
                       overflow: TextOverflow.ellipsis,
                       style: Txt.small(p.muted),
                     ),
+                    if (_message.mine && _message.recipients.length > 1) ...[
+                      const SizedBox(height: 16),
+                      SeenBy(
+                        recipients: _message.recipients.where((r) => r.peer != engine.me.id).toList(),
+                        nameOf: engine.nameOf,
+                        selected: selectedPeer,
+                        onSelect: (id) => setState(() => _peer = id),
+                      ),
+                    ],
                     if (peers.length > 1) ...[
                       const SizedBox(height: 16),
                       DropdownButtonFormField<String>(
