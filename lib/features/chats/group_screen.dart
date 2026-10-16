@@ -37,15 +37,15 @@ class GroupChatScreen extends ConsumerWidget {
           ],
         ),
         actions: [
-          IconBtn(Icons.info_outline_rounded, tooltip: 'Technical',
-              onTap: () => showScopeTech(context, scope, groupId: id)),
-          IconBtn(Icons.call_outlined, tooltip: 'Group call', onTap: () {
+          Builder(builder: (btn) {
             final others = {g.owner, ...g.members}.where((m) => m != ref.read(engineProvider).me.id).toList();
-            if (others.length + 1 > CallManager.maxMembers) {
-              toast(context, 'Group calls are limited to ${CallManager.maxMembers} people for now');
-              return;
-            }
-            startCall(context, ref, others, video: false);
+            return IconBtn(Icons.call_outlined, tooltip: 'Call', onTap: () {
+              if (others.length + 1 > CallManager.maxMembers) {
+                toast(context, 'Group calls are limited to ${CallManager.maxMembers} people for now');
+                return;
+              }
+              showCallMenu(btn, ref, others);
+            });
           }),
           IconBtn(Icons.groups_outlined, tooltip: 'Members', onTap: () => context.push('/g/${g.id}/info')),
           IconBtn(Icons.more_vert_rounded, onTap: () => _menu(context, ref, g)),

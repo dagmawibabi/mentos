@@ -2,9 +2,11 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/widgets.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 
+import '../../core/device_access.dart';
 import '../../data/media_store.dart';
 import '../../data/models.dart';
 import '../../net/engine.dart';
@@ -40,7 +42,10 @@ Future<Pending> _image(XFile x) async {
   return Pending(File(x.path), x.name, width: w, height: h);
 }
 
-Future<List<Pending>> pickImages({int limit = 10}) async {
+Future<List<Pending>> pickImages({BuildContext? context, int limit = 10}) async {
+  if (!await allowMediaOrTell(context, images: true, message: 'Photo access is needed to choose pictures.')) {
+    return const [];
+  }
   final xs = await _picker.pickMultiImage(maxWidth: 2048, imageQuality: 86, limit: limit);
   return Future.wait(xs.map(_image));
 }
@@ -50,7 +55,11 @@ Future<Pending?> takePhoto() async {
   return x == null ? null : _image(x);
 }
 
-Future<Pending?> pickVideo({bool camera = false}) async {
+Future<Pending?> pickVideo({BuildContext? context, bool camera = false}) async {
+  if (!camera &&
+      !await allowMediaOrTell(context, videos: true, message: 'Video access is needed to choose a video.')) {
+    return null;
+  }
   final x = await _picker.pickVideo(
     source: camera ? ImageSource.camera : ImageSource.gallery,
     maxDuration: const Duration(minutes: 10),
@@ -58,7 +67,16 @@ Future<Pending?> pickVideo({bool camera = false}) async {
   return x == null ? null : Pending(File(x.path), x.name);
 }
 
-Future<List<Pending>> pickFiles(MediaStore store) async {
+Future<List<Pending>> pickFiles(MediaStore store, {BuildContext? context}) async {
+  if (!await allowMediaOrTell(
+    context,
+    images: true,
+    videos: true,
+    audio: true,
+    message: 'File access is needed to attach files.',
+  )) {
+    return const [];
+  }
   final files = await FilePicker.pickFiles();
   final out = <Pending>[];
   for (final f in files) {

@@ -73,10 +73,43 @@ class Palette {
     accentSoft: Color(0xFF0F2A1F),
     danger: Color(0xFFF2675C),
     dangerSoft: Color(0xFF2E1513),
-    bubbleMine: Color(0xFFECEFED),
-    bubbleMineInk: Color(0xFF0A0C0B),
+    bubbleMine: Color(0xFF1C2B26),
+    bubbleMineInk: Color(0xFFECEFED),
     isDark: true,
   );
+
+  /// Recolors the live accent. Surfaces stay the same.
+  Palette withAccent(String name) {
+    if (name == 'emerald' || name.isEmpty) return this;
+    final (Color color, Color onColor, Color soft) = switch (name) {
+      'blue' => isDark
+          ? (const Color(0xFF60A5FA), const Color(0xFF041018), const Color(0xFF122033))
+          : (const Color(0xFF2563EB), const Color(0xFFFFFFFF), const Color(0xFFDBEAFE)),
+      'amber' => isDark
+          ? (const Color(0xFFFBBF24), const Color(0xFF1C1404), const Color(0xFF2A2110))
+          : (const Color(0xFFD97706), const Color(0xFF1C1204), const Color(0xFFFEF3C7)),
+      'ink' => (ink, bg, raised),
+      _ => (accent, accentInk, accentSoft),
+    };
+    return Palette(
+      bg: bg,
+      surface: surface,
+      raised: raised,
+      line: line,
+      ink: this.ink,
+      inkSoft: inkSoft,
+      muted: muted,
+      faint: faint,
+      accent: color,
+      accentInk: onColor,
+      accentSoft: soft,
+      danger: danger,
+      dangerSoft: dangerSoft,
+      bubbleMine: bubbleMine,
+      bubbleMineInk: bubbleMineInk,
+      isDark: isDark,
+    );
+  }
 }
 
 class Space {

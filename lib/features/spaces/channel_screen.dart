@@ -136,19 +136,27 @@ class _ChannelPin extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
-    return Material(
-      color: p.surface,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: Row(
-            children: [
-              Icon(Icons.push_pin_rounded, size: 16, color: p.accent),
-              const SizedBox(width: 8),
-              Expanded(child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: Txt.small(p.ink))),
-              Icon(Icons.chevron_right_rounded, color: p.faint),
-            ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
+      child: Material(
+        color: p.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.lg),
+          side: BorderSide(color: p.line),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(Radii.lg),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Space.lg, 12, Space.md, 12),
+            child: Row(
+              children: [
+                Icon(Icons.push_pin_rounded, size: 16, color: p.accent),
+                const SizedBox(width: 8),
+                Expanded(child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: Txt.small(p.ink))),
+                Icon(Icons.chevron_right_rounded, color: p.faint),
+              ],
+            ),
           ),
         ),
       ),

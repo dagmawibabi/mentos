@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/device_access.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
@@ -70,8 +71,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
           Center(
             child: GestureDetector(
               onTap: () async {
+                if (!await allowMediaOrTell(context, images: true, message: 'Photo access is needed to choose a picture.')) {
+                  return;
+                }
                 final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 512, imageQuality: 85);
-                if (x != null) setState(() => _photo = x);
+                if (!mounted || x == null) return;
+                setState(() => _photo = x);
               },
               child: Stack(
                 children: [

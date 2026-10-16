@@ -26,10 +26,22 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Mentos uses your location only while you are sharing a live location in a chat.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Mentos keeps sharing a live location you started until you stop it or it expires, including when the app is in the background.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Mentos uses the camera to scan contact and invite codes, and to take photos you choose to share.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Mentos uses the microphone to record voice messages.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Mentos uses your location only while you are sharing a live location in a chat.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Mentos uses your location only while you are sharing a live location in a chat, including if you leave the app before the share ends.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Mentos lets you pick photos and videos to share.</string>
 	<key>NSFaceIDUsageDescription</key>

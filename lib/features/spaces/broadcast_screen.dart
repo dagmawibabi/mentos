@@ -9,11 +9,15 @@ import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
+import '../../net/link_preview.dart';
 import '../../net/views.dart';
+import '../../net/engine.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
 import '../calls/live_screen.dart';
+import '../chats/composer.dart';
+import '../feed/post_card.dart';
 
 /// A channel: one voice at the top, everyone else reads and comments.
 class BroadcastScreen extends ConsumerStatefulWidget {
@@ -35,34 +39,42 @@ class BroadcastScreen extends ConsumerStatefulWidget {
 }
 
 class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
-  final _text = TextEditingController();
-  bool _sending = false;
   bool _silent = false;
-
-  @override
-  void dispose() {
-    _text.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
     final e = ref.read(engineProvider);
-    final posts = ref.watch(channelFeedProvider((widget.owner, widget.channelId))).value ?? const <PostView>[];
+    final posts =
+        ref
+            .watch(channelFeedProvider((widget.owner, widget.channelId)))
+            .value ??
+        const <PostView>[];
     final space = widget.spaceId == null ? null : e.space(widget.spaceId!);
-    final mine = widget.owner == e.me.id ||
+    final mine =
+        widget.owner == e.me.id ||
         (space != null && space.roleOf(e.me.id).index <= Role.mod.index);
-    final bcast = e.broadcasts(owner: widget.owner).where((b) => b.id == widget.channelId).firstOrNull;
-    final channel = space?.channels.where((c) => c.id == widget.channelId).firstOrNull;
-    final name = widget.title ?? bcast?.name ?? channel?.name ?? e.nameOf(widget.owner);
+    final bcast = e
+        .broadcasts(owner: widget.owner)
+        .where((b) => b.id == widget.channelId)
+        .firstOrNull;
+    final channel = space?.channels
+        .where((c) => c.id == widget.channelId)
+        .firstOrNull;
+    final name =
+        widget.title ?? bcast?.name ?? channel?.name ?? e.nameOf(widget.owner);
     final about = (bcast?.about ?? channel?.about ?? '').trim();
     ref.watch(broadcastsProvider);
     final subs = widget.spaceId == null
         ? (bcast == null ? 0 : e.subscribers(bcast).length)
-        : (ref.watch(membersProvider(widget.spaceId!)).value ?? const []).length;
-    final state = bcast == null ? (pinned: null, comments: true) : e.channelState(bcast);
-    final pinned = state.pinned == null ? null : posts.where((x) => x.id == state.pinned).firstOrNull;
+        : (ref.watch(membersProvider(widget.spaceId!)).value ?? const [])
+              .length;
+    final state = bcast == null
+        ? (pinned: null, comments: true)
+        : e.channelState(bcast);
+    final pinned = state.pinned == null
+        ? null
+        : posts.where((x) => x.id == state.pinned).firstOrNull;
     final subscribed = bcast != null && e.isSubscribed(bcast.owner, bcast.id);
     final scope = Scope.bcast(widget.owner, widget.channelId);
     final muted = e.db.chat(scope)['muted'] == 1;
@@ -71,7 +83,8 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
       appBar: AppBar(
         titleSpacing: 0,
         title: InkWell(
-          onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner)),
+          onTap: () =>
+              _info(context, name, about, subs, e.nameOf(widget.owner)),
           child: Row(
             children: [
               Avatar(id: widget.owner, size: 36),
@@ -80,7 +93,12 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.heading(p.ink)),
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Txt.heading(p.ink),
+                    ),
                     Text(
                       '${compact(subs)} subscriber${subs == 1 ? '' : 's'}',
                       style: Txt.mono(p.muted, size: 11),
@@ -92,9 +110,71 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
           ),
         ),
         actions: [
+          if (mine && widget.spaceId == null)
+            IconBtn(
+              _silent
+                  ? Icons.notifications_off_outlined
+                  : Icons.notifications_none_rounded,
+              tooltip: _silent
+                  ? 'Silent: subscribers get no notification'
+                  : 'Subscribers get notified',
+              onTap: () => setState(() => _silent = !_silent),
+            ),
           if (bcast != null && bcast.owner == e.me.id)
-            IconBtn(Icons.sensors_rounded, tooltip: 'Go live', onTap: () => goLive(context, ref, bcast)),
-          IconBtn(Icons.more_horiz_rounded, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
+            IconBtn(
+              Icons.person_add_alt_1_rounded,
+              tooltip: 'Invite people',
+              onTap: () async {
+                final peer = await showModalBottomSheet<String>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (ctx) => SafeArea(
+                    child: SizedBox(
+                      height: MediaQuery.sizeOf(ctx).height * .6,
+                      child: ListView(
+                        children: [
+                          const ListTile(
+                            title: Text('Invite to channel'),
+                            subtitle: Text(
+                              'People can subscribe from their invitation.',
+                            ),
+                          ),
+                          for (final person in e.people().where(
+                            (x) =>
+                                !x.blocked &&
+                                x.id != e.me.id &&
+                                !e.subscribers(bcast).contains(x.id),
+                          ))
+                            ListTile(
+                              title: Text(e.nameOf(person.id)),
+                              trailing: const Icon(Icons.add),
+                              onTap: () => Navigator.pop(ctx, person.id),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+                if (peer == null) return;
+                try {
+                  await e.inviteToChannel(bcast, peer);
+                  if (context.mounted) toast(context, 'Invitation sent');
+                } catch (err) {
+                  if (context.mounted) toast(context, '$err');
+                }
+              },
+            ),
+          if (bcast != null && bcast.owner == e.me.id)
+            IconBtn(
+              Icons.sensors_rounded,
+              tooltip: 'Go live',
+              onTap: () => goLive(context, ref, bcast),
+            ),
+          IconBtn(
+            Icons.more_horiz_rounded,
+            onTap: () =>
+                _info(context, name, about, subs, e.nameOf(widget.owner)),
+          ),
           const SizedBox(width: 4),
         ],
       ),
@@ -106,7 +186,11 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
               onTap: () => context.push('/post/${pinned.id}'),
             )
           else if (about.isNotEmpty)
-            _Pinned(text: about, onTap: () => _info(context, name, about, subs, e.nameOf(widget.owner))),
+            _Pinned(
+              text: about,
+              onTap: () =>
+                  _info(context, name, about, subs, e.nameOf(widget.owner)),
+            ),
           Expanded(
             child: posts.isEmpty
                 ? EmptyState(
@@ -118,22 +202,31 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                   )
                 : ListView(
                     reverse: true,
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                    padding: const EdgeInsets.only(
+                      top: Space.md,
+                      bottom: Space.xs,
+                    ),
                     children: [
                       for (final post in posts)
-                        _ChannelPost(
-                          post: post,
-                          comments: state.comments,
+                        GestureDetector(
                           onLongPress: mine && bcast != null
                               ? () => showActions(context, [
-                                    SheetAction(
-                                      Icons.push_pin_outlined,
-                                      state.pinned == post.id ? 'Unpin' : 'Pin to top',
-                                      () => e.setChannelState(bcast,
-                                          pinned: state.pinned == post.id ? null : post.id, comments: state.comments),
+                                  SheetAction(
+                                    Icons.push_pin_outlined,
+                                    state.pinned == post.id
+                                        ? 'Unpin'
+                                        : 'Pin to top',
+                                    () => e.setChannelState(
+                                      bcast,
+                                      pinned: state.pinned == post.id
+                                          ? null
+                                          : post.id,
+                                      comments: state.comments,
                                     ),
-                                  ])
+                                  ),
+                                ])
                               : null,
+                          child: PostCard(post: post),
                         ),
                     ],
                   ),
@@ -142,14 +235,25 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
             SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+                padding: const EdgeInsets.fromLTRB(
+                  Space.gutter,
+                  Space.sm,
+                  Space.gutter,
+                  Space.sm,
+                ),
                 child: SizedBox(
                   width: double.infinity,
                   child: subscribed
                       ? OutlinedButton.icon(
-                          icon: Icon(muted ? Icons.notifications_off_outlined : Icons.notifications_none_rounded, size: 18),
+                          icon: Icon(
+                            muted
+                                ? Icons.notifications_off_outlined
+                                : Icons.notifications_none_rounded,
+                            size: 18,
+                          ),
                           label: Text(muted ? 'Unmute' : 'Mute'),
-                          onPressed: () => e.updateChat(scope, {'muted': muted ? 0 : 1}),
+                          onPressed: () =>
+                              e.updateChat(scope, {'muted': muted ? 0 : 1}),
                         )
                       : FilledButton(
                           onPressed: () => e.subscribe(bcast, true),
@@ -159,76 +263,55 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
               ),
             ),
           if (mine)
-            SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-                child: Row(
-                  children: [
-                    if (widget.spaceId == null)
-                      IconBtn(
-                        _silent ? Icons.notifications_off_outlined : Icons.notifications_none_rounded,
-                        tooltip: _silent ? 'Silent: subscribers get no notification' : 'Subscribers get notified',
-                        active: _silent,
-                        onTap: () {
-                          setState(() => _silent = !_silent);
-                          toast(context, _silent ? 'Next post is silent' : 'Subscribers will be notified');
-                        },
-                      ),
-                    Expanded(
-                      child: TextField(
-                        controller: _text,
-                        minLines: 1,
-                        maxLines: 4,
-                        textInputAction: TextInputAction.send,
-                        onSubmitted: (_) => _send(),
-                        decoration: const InputDecoration(hintText: 'Broadcast'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    IconBtn(
-                      Icons.send_rounded,
-                      onTap: _sending ? null : _send,
-                    ),
-                  ],
-                ),
-              ),
+            Composer(
+              scope: widget.spaceId == null
+                  ? scope
+                  : Scope.channel(widget.spaceId!, widget.channelId),
+              onCancelReply: () {},
+              onCancelEdit: () {},
+              publishPost: (text, media, poll) async {
+                await e.createPost(
+                  text: text,
+                  media: media,
+                  poll: poll,
+                  preview: await previewBody(text),
+                  bcastId: widget.spaceId == null ? widget.channelId : null,
+                  channelId: widget.spaceId == null ? null : widget.channelId,
+                  spaceId: widget.spaceId,
+                  silent: _silent,
+                );
+                if (mounted) setState(() => _silent = false);
+              },
             ),
         ],
       ),
     );
   }
 
-  Future<void> _send() async {
-    final text = _text.text.trim();
-    if (text.isEmpty || _sending) return;
-    setState(() => _sending = true);
-    try {
-      await ref.read(engineProvider).createPost(
-            text: text,
-            bcastId: widget.spaceId == null ? widget.channelId : null,
-            channelId: widget.spaceId == null ? null : widget.channelId,
-            spaceId: widget.spaceId,
-            silent: _silent,
-          );
-      _text.clear();
-      if (mounted) setState(() => _silent = false);
-    } catch (err) {
-      if (mounted) toast(context, 'Could not broadcast: $err');
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  void _info(BuildContext context, String name, String about, int subs, String ownerName) {
+  void _info(
+    BuildContext context,
+    String name,
+    String about,
+    int subs,
+    String ownerName,
+  ) {
     final p = context.pal;
-    final bcast = ref.read(engineProvider).broadcasts(owner: widget.owner).where((b) => b.id == widget.channelId).firstOrNull;
+    final bcast = ref
+        .read(engineProvider)
+        .broadcasts(owner: widget.owner)
+        .where((b) => b.id == widget.channelId)
+        .firstOrNull;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(Space.gutter, 8, Space.gutter, Space.lg),
+          padding: const EdgeInsets.fromLTRB(
+            Space.gutter,
+            8,
+            Space.gutter,
+            Space.lg,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -252,7 +335,9 @@ class _BroadcastScreenState extends ConsumerState<BroadcastScreen> {
                 width: double.infinity,
                 child: OutlinedButton(
                   onPressed: () {
-                    Clipboard.setData(ClipboardData(text: '$name\nowner ${widget.owner}'));
+                    Clipboard.setData(
+                      ClipboardData(text: '$name\nowner ${widget.owner}'),
+                    );
                     toast(ctx, 'Invite copied');
                   },
                   child: const Text('Copy invite'),
@@ -275,21 +360,34 @@ class _Pinned extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.pal;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      padding: const EdgeInsets.fromLTRB(
+        Space.gutter,
+        Space.md,
+        Space.gutter,
+        0,
+      ),
       child: Material(
         color: p.surface,
-        borderRadius: BorderRadius.circular(14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.lg),
+          side: BorderSide(color: p.line),
+        ),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(Radii.lg),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            padding: const EdgeInsets.fromLTRB(Space.lg, 12, Space.md, 12),
             child: Row(
               children: [
                 Icon(Icons.push_pin_rounded, size: 16, color: p.accent),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(text, maxLines: 2, overflow: TextOverflow.ellipsis, style: Txt.small(p.ink)),
+                  child: Text(
+                    text,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.small(p.ink),
+                  ),
                 ),
                 Icon(Icons.chevron_right_rounded, color: p.faint),
               ],
@@ -321,7 +419,8 @@ class _ChannelControls extends ConsumerWidget {
             title: 'Comments',
             subtitle: 'Let subscribers reply under posts',
             value: state.comments,
-            onChanged: (v) => e.setChannelState(bcast, pinned: state.pinned, comments: v),
+            onChanged: (v) =>
+                e.setChannelState(bcast, pinned: state.pinned, comments: v),
           ),
         if (!mine && e.isSubscribed(bcast.owner, bcast.id))
           RowTile(
@@ -351,109 +450,6 @@ class _ChannelControls extends ConsumerWidget {
   }
 }
 
-class _ChannelPost extends ConsumerStatefulWidget {
-  const _ChannelPost({required this.post, this.comments = true, this.onLongPress});
-  final PostView post;
-  final bool comments;
-  final VoidCallback? onLongPress;
-
-  @override
-  ConsumerState<_ChannelPost> createState() => _ChannelPostState();
-}
-
-class _ChannelPostState extends ConsumerState<_ChannelPost> {
-  Timer? _seen;
-
-  @override
-  void initState() {
-    super.initState();
-    // Counts a view once the post has been on screen for a moment.
-    _seen = Timer(const Duration(milliseconds: 1200), () {
-      final e = ref.read(maybeEngineProvider);
-      if (mounted && e != null && widget.post.author != e.me.id) unawaited(e.recordView(widget.post.item));
-    });
-  }
-
-  @override
-  void dispose() {
-    _seen?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    final e = ref.read(engineProvider);
-    final post = widget.post;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Material(
-        color: p.surface,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: widget.comments ? () => context.push('/post/${post.id}') : null,
-          onLongPress: widget.onLongPress,
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(e.nameOf(post.author), style: Txt.small(p.accent).copyWith(fontWeight: FontWeight.w600)),
-                if (post.title.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(post.title, style: Txt.bodyStrong(p.ink)),
-                ],
-                if (post.text.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(post.text, style: Txt.body(p.ink)),
-                ],
-                if (post.item.body['live'] is Map && !post.edited && post.author != e.me.id) ...[
-                  const SizedBox(height: 8),
-                  FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: p.danger, minimumSize: const Size(0, 36)),
-                    onPressed: () => joinLive(context, ref, post.item),
-                    icon: const Icon(Icons.sensors_rounded, size: 18),
-                    label: const Text('Join live'),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    if (post.likes > 0) ...[
-                      Icon(Icons.favorite_rounded, size: 14, color: p.danger),
-                      const SizedBox(width: 4),
-                      Text('${post.likes}', style: Txt.mono(p.muted, size: 11)),
-                      const SizedBox(width: 12),
-                    ],
-                    const Spacer(),
-                    Icon(Icons.visibility_outlined, size: 14, color: p.faint),
-                    const SizedBox(width: 4),
-                    Text('${post.views}', style: Txt.mono(p.faint, size: 11)),
-                    const SizedBox(width: 8),
-                    Text(
-                      post.edited ? 'edited ${clock(post.item.ts)}' : clock(post.item.ts),
-                      style: Txt.mono(p.faint, size: 11),
-                    ),
-                  ],
-                ),
-                if (post.comments > 0 && widget.comments)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '${post.comments} comment${post.comments == 1 ? '' : 's'}',
-                      style: Txt.small(p.accent),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _InfoRow extends StatelessWidget {
   const _InfoRow({required this.label, required this.value});
   final String label;
@@ -476,72 +472,20 @@ class _InfoRow extends StatelessWidget {
 
 class CreateBroadcastSheet {
   static Future<void> open(BuildContext context, WidgetRef ref) async {
-    final drafted = await showDialog<({String name, String about})>(
-      context: context,
-      builder: (ctx) => const _NewChannelDialog(),
+    final drafted = await askNamed(
+      context,
+      title: 'New channel',
+      action: 'Create',
+      nameMax: 48,
+      body: 'You post at the top. Everyone else reads and comments.',
+      aboutHint: 'What this channel is for',
     );
-    if (drafted == null || drafted.name.trim().isEmpty) return;
-    final b = await ref.read(engineProvider).createBroadcast(drafted.name.trim(), about: drafted.about.trim());
+    if (drafted == null || drafted.name.trim().isEmpty || !context.mounted)
+      return;
+    final b = await ref
+        .read(engineProvider)
+        .createBroadcast(drafted.name.trim(), about: drafted.about.trim());
     if (context.mounted) context.push('/ch/${b.owner}/${b.id}');
-  }
-}
-
-class _NewChannelDialog extends StatefulWidget {
-  const _NewChannelDialog();
-
-  @override
-  State<_NewChannelDialog> createState() => _NewChannelDialogState();
-}
-
-class _NewChannelDialogState extends State<_NewChannelDialog> {
-  final _name = TextEditingController();
-  final _about = TextEditingController();
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _about.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('New channel'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _name,
-            autofocus: true,
-            maxLength: 48,
-            decoration: const InputDecoration(hintText: 'Name', counterText: ''),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _about,
-            maxLength: 240,
-            minLines: 2,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              hintText: 'What this channel is for',
-              counterText: '',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () {
-            final name = _name.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, (name: name, about: _about.text.trim()));
-          },
-          child: const Text('Create'),
-        ),
-      ],
-    );
   }
 }
 
@@ -553,46 +497,126 @@ class BroadcastRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final e = ref.read(engineProvider);
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: p.raised,
-        child: Icon(Icons.campaign_outlined, color: p.inkSoft, size: 20),
-      ),
-      title: Text(channel.name),
-      subtitle: Text('${e.nameOf(channel.owner)} · channel', style: Txt.mono(p.muted, size: 11)),
+    return InkWell(
       onTap: () => context.push('/ch/${channel.owner}/${channel.id}'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Space.gutter,
+          vertical: 12,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: p.raised,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: p.line),
+              ),
+              child: Icon(Icons.campaign_outlined, color: p.inkSoft, size: 20),
+            ),
+            const SizedBox(width: Space.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    channel.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.bodyStrong(p.ink),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '${e.nameOf(channel.owner)} · channel',
+                    style: Txt.mono(p.muted, size: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class SpaceChannelRow extends ConsumerWidget {
-  const SpaceChannelRow({super.key, required this.space, required this.channel});
+  const SpaceChannelRow({
+    super.key,
+    required this.space,
+    required this.channel,
+  });
   final SpaceInfo space;
   final Channel channel;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
-    final posts = ref.watch(channelFeedProvider((space.id, channel.id))).value ?? const [];
-    return ListTile(
-      leading: CircleAvatar(
-        backgroundColor: p.raised,
-        child: Icon(Icons.campaign_outlined, color: p.inkSoft, size: 20),
-      ),
-      title: Text(channel.name),
-      subtitle: Text(
-        posts.isEmpty ? 'No broadcasts yet' : (posts.first.text.isEmpty ? 'attachment' : posts.first.text),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: Txt.mono(p.muted, size: 11),
-      ),
+    final posts =
+        ref.watch(channelFeedProvider((space.id, channel.id))).value ??
+        const [];
+    return InkWell(
       onTap: () => context.push('/s/${space.id}/c/${channel.id}'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: Space.gutter,
+          vertical: 12,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: p.raised,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: p.line),
+              ),
+              child: Icon(Icons.campaign_outlined, color: p.inkSoft, size: 20),
+            ),
+            const SizedBox(width: Space.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    channel.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.bodyStrong(p.ink),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    posts.isEmpty
+                        ? 'No broadcasts yet'
+                        : (posts.first.text.isEmpty
+                              ? 'attachment'
+                              : posts.first.text),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.mono(p.muted, size: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 class ForumRoomRow extends ConsumerWidget {
-  const ForumRoomRow({super.key, required this.space, required this.board, this.legacyChannel = false});
+  const ForumRoomRow({
+    super.key,
+    required this.space,
+    required this.board,
+    this.legacyChannel = false,
+  });
   final SpaceInfo space;
   final Channel board;
   final bool legacyChannel;
@@ -601,21 +625,37 @@ class ForumRoomRow extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final e = ref.read(engineProvider);
-    final scope = legacyChannel ? Scope.channel(space.id, board.id) : Scope.forum(space.id, board.id);
+    final scope = legacyChannel
+        ? Scope.channel(space.id, board.id)
+        : Scope.forum(space.id, board.id);
     final msgs = ref.watch(messagesProvider(scope)).value ?? const [];
     final last = msgs.lastOrNull;
     return InkWell(
-      onTap: () => context.push(legacyChannel ? '/s/${space.id}/f/${board.id}?chan=1' : '/s/${space.id}/f/${board.id}'),
+      onTap: () => context.push(
+        legacyChannel
+            ? '/s/${space.id}/f/${board.id}?chan=1'
+            : '/s/${space.id}/f/${board.id}',
+      ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: 12),
+        padding: const EdgeInsets.symmetric(
+          horizontal: Space.gutter,
+          vertical: 12,
+        ),
         child: Row(
           children: [
             Container(
-              width: 36,
-              height: 36,
+              width: 44,
+              height: 44,
               alignment: Alignment.center,
-              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(10)),
-              child: Text('#', style: Txt.mono(p.ink, size: 16, w: FontWeight.w500)),
+              decoration: BoxDecoration(
+                color: p.raised,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: p.line),
+              ),
+              child: Text(
+                '#',
+                style: Txt.mono(p.ink, size: 16, w: FontWeight.w500),
+              ),
             ),
             const SizedBox(width: Space.md),
             Expanded(

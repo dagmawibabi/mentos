@@ -65,6 +65,7 @@ class LiveState {
   Uint8List? frame;
   double level = 0;
   int hearts = 0;
+  String? reaction;
 
   /// The channel post that announced this stream.
   String? postId;
@@ -199,6 +200,18 @@ class LiveManager {
     }
   }
 
+  void sendReact(String emoji) {
+    final s = _live;
+    if (s == null || !s.live || emoji.isEmpty) return;
+    s.reaction = emoji;
+    if (s.hosting) {
+      _broadcast({'t': 'react', 'emoji': emoji});
+    } else {
+      link.callSend(s.id, LivePacket.encode({'t': 'react', 'emoji': emoji}));
+    }
+    _changed();
+  }
+
   void sendHeart() {
     final s = _live;
     if (s == null || !s.live) return;
@@ -213,8 +226,8 @@ class LiveManager {
 
   Future<void> setCamera(bool on) async {
     _live?.camera = on;
-    await devices?.setVideo(on);
     _changed();
+    await devices?.setVideo(on);
   }
 
   // ---------------------------------------------------------------------------
@@ -313,6 +326,10 @@ class LiveManager {
           s.hearts++;
           _broadcast({'t': 'heart'});
           changed = true;
+        } else if (m['t'] == 'react' && m['emoji'] is String) {
+          s.reaction = m['emoji'] as String;
+          _broadcast({'t': 'react', 'emoji': s.reaction});
+          changed = true;
         } else if (m['t'] == 'chat' && m['text'] is String) {
           final text = (m['text'] as String).trim();
           if (text.isEmpty || text.length > LivePacket.maxText) continue;
@@ -341,6 +358,8 @@ class LiveManager {
               if (text.length <= LivePacket.maxText) s.chat.add(LiveChat(m['from'] as String, text, nowMs()));
             case 'heart':
               s.hearts++;
+            case 'react' when m['emoji'] is String:
+              s.reaction = m['emoji'] as String;
             case 'count' when m['n'] is num:
               s.viewerCount = (m['n'] as num).toInt().clamp(0, maxViewers);
           }
@@ -361,7 +380,9 @@ class LiveManager {
     final s = _live;
     if (s == null || !s.live) return;
     s.live = false;
+    s.camera = false;
     s.reason = reason;
+    _changed();
     _pump?.cancel();
     _count?.cancel();
     await _micSub?.cancel();

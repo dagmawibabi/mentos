@@ -8,10 +8,12 @@ import '../../core/theme/tokens.dart';
 import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
+import '../../widgets/link_card.dart';
 import '../../widgets/media.dart';
 import '../../widgets/nsfw.dart';
 import '../feed/post_card.dart';
 import 'delivery_window.dart';
+import 'live_map.dart';
 
 class Bubble extends ConsumerWidget {
   const Bubble({
@@ -187,10 +189,41 @@ class Bubble extends ConsumerWidget {
               ),
             ),
           ),
+        if (m.item.body['gif'] is String)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.network(m.item.body['gif'] as String, height: 140, fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => Text(m.item.body['gif'] as String, style: Txt.small(fg))),
+            ),
+          ),
+        if (m.loc != null)
+          LiveMapCard(scope: scope, messageId: m.id, fix: m.loc!, mine: mine)
+        else if (m.item.body['loc'] is Map)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.location_on_rounded, size: 16, color: fg),
+                const SizedBox(width: 4),
+                Text('Live · ${m.item.body['loc']['label'] ?? m.text}', style: Txt.small(fg)),
+              ],
+            ),
+          ),
         if (m.text.isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: Text(m.text, style: Txt.body(fg).copyWith(height: 1.38)),
+            child: Text(
+              m.text,
+              style: (m.item.body['stk'] == true ? Txt.body(fg).copyWith(fontSize: 40, height: 1.2) : Txt.body(fg).copyWith(height: 1.38)),
+            ),
+          ),
+        if (m.text.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
+            child: LinkCard(text: m.text, attached: m.preview),
           ),
         if (!mediaOnly)
           Padding(
@@ -372,6 +405,7 @@ String _mediaLabel(MessageView m) {
 }
 
 String previewOf(MessageView m) {
+  if (m.loc != null) return m.loc!.active ? 'Live location' : 'Location';
   if (m.text.isNotEmpty) return m.text;
   if (m.poll != null) return 'Poll: ${m.poll!.poll.question}';
   if (m.media.isNotEmpty) return _mediaLabel(m);

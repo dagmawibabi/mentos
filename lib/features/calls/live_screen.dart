@@ -9,11 +9,11 @@ import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
-import '../../net/call/live.dart';
 import '../../state/calls.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
+import 'call_screen.dart';
 import 'devices.dart';
 
 /// Goes live on [channel] after asking voice or video.
@@ -31,7 +31,7 @@ Future<void> goLive(BuildContext context, WidgetRef ref, Bcast channel) async {
   if (video == null || !context.mounted) return;
   try {
     await m.start(channel, video: video!);
-    if (context.mounted) unawaited(context.push('/live'));
+    if (context.mounted) unawaited(openOnce(context, '/live'));
   } catch (e) {
     if (context.mounted) toast(context, e is StateError ? e.message : '$e');
   }
@@ -45,7 +45,7 @@ Future<void> joinLive(BuildContext context, WidgetRef ref, Item post) async {
   if (m == null || live is! Map || live['id'] is! String || chan == null) return;
   try {
     await m.watch(post.author, chan, live['id'] as String, video: live['video'] != false);
-    if (context.mounted) unawaited(context.push('/live'));
+    if (context.mounted) unawaited(openOnce(context, '/live'));
   } catch (e) {
     if (context.mounted) toast(context, e is StateError ? e.message : '$e');
   }
@@ -92,25 +92,26 @@ class _LiveScreenState extends ConsumerState<LiveScreen> {
     if (m == null || s == null || e == null) {
       return const Scaffold(backgroundColor: Colors.black, body: Center(child: Text('No live stream')));
     }
-    final preview = m.devices is PhoneDevices ? (m.devices as PhoneDevices).preview : null;
+    final phone = m.devices is PhoneDevices ? m.devices as PhoneDevices : null;
     final p = context.pal;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (s.hosting && s.camera && preview != null && preview.value.isInitialized)
-            CameraPreview(preview)
+          if (s.hosting && s.camera && phone != null)
+            ListenableBuilder(
+              listenable: phone,
+              builder: (_, _) {
+                final preview = phone.preview;
+                if (cameraPreviewReady(preview)) return CameraPreview(preview!);
+                return _LiveIdle(owner: s.owner, level: s.level);
+              },
+            )
           else if (!s.hosting && s.frame != null)
             Image.memory(s.frame!, fit: BoxFit.cover, gaplessPlayback: true)
           else
-            Center(
-              child: AnimatedScale(
-                duration: Motion.fast,
-                scale: 1 + s.level * .2,
-                child: Avatar(id: s.owner, size: 120, presence: false),
-              ),
-            ),
+            _LiveIdle(owner: s.owner, level: s.level),
           SafeArea(
             child: Column(
               children: [
@@ -142,6 +143,10 @@ class _LiveScreenState extends ConsumerState<LiveScreen> {
                         const Icon(Icons.favorite_rounded, size: 16, color: Color(0xFFFF5A7A)),
                         const SizedBox(width: 4),
                         Text('${s.hearts}', style: Txt.mono(Colors.white70, size: 12)),
+                      ],
+                      if (s.reaction != null) ...[
+                        const SizedBox(width: 8),
+                        Text(s.reaction!, style: const TextStyle(fontSize: 18)),
                       ],
                       IconBtn(Icons.close_rounded, color: Colors.white, tooltip: s.hosting ? 'End stream' : 'Leave', onTap: () async {
                         if (s.live && s.hosting) {
@@ -221,8 +226,11 @@ class _LiveScreenState extends ConsumerState<LiveScreen> {
                           if (s.video)
                             IconBtn(s.camera ? Icons.videocam_rounded : Icons.videocam_off_rounded,
                                 color: Colors.white, tooltip: 'Camera', onTap: () => m.setCamera(!s.camera)),
-                        ] else
+                        ] else ...[
                           IconBtn(Icons.favorite_rounded, color: const Color(0xFFFF5A7A), tooltip: 'Send a heart', onTap: m.sendHeart),
+                          for (final emoji in const ['🔥', '👏', '😂'])
+                            IconButton(onPressed: () => m.sendReact(emoji), icon: Text(emoji, style: const TextStyle(fontSize: 18))),
+                        ],
                       ],
                     ),
                   ),
@@ -230,6 +238,24 @@ class _LiveScreenState extends ConsumerState<LiveScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LiveIdle extends StatelessWidget {
+  const _LiveIdle({required this.owner, required this.level});
+
+  final String owner;
+  final double level;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: AnimatedScale(
+        duration: Motion.fast,
+        scale: 1 + level * .2,
+        child: Avatar(id: owner, size: 120, presence: false),
       ),
     );
   }

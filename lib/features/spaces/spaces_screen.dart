@@ -34,12 +34,43 @@ class SpaceGlyph extends StatelessWidget {
 }
 
 class SpacesScreen extends ConsumerWidget {
-  const SpacesScreen({super.key});
+  const SpacesScreen({super.key, this.embedded = false});
+
+  /// Drawn inside the Chats tab, without its own app bar.
+  final bool embedded;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final spaces = ref.watch(spacesProvider).value ?? const <SpaceInfo>[];
+    final body = spaces.isEmpty
+        ? EmptyState(
+            icon: Icons.grid_view_rounded,
+            title: 'No spaces yet',
+            body: 'A space is a small community with channels and a shared feed. '
+                'It exists on its members\' phones — there\'s no server to host it.',
+            action: Column(
+              children: [
+                FilledButton.icon(
+                  onPressed: () => context.push('/new-space'),
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Create a space'),
+                ),
+                const SizedBox(height: Space.sm),
+                TextButton(
+                  onPressed: () => context.push('/connect'),
+                  child: Text('I have an invite', style: Txt.bodyStrong(p.muted)),
+                ),
+              ],
+            ),
+          )
+        : ListView.separated(
+            padding: const EdgeInsets.only(bottom: Space.xxl),
+            itemCount: spaces.length,
+            separatorBuilder: (_, _) => const Hairline(indent: Space.gutter + 60),
+            itemBuilder: (_, i) => _SpaceRow(space: spaces[i]),
+          );
+    if (embedded) return body;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Spaces'),
@@ -49,33 +80,7 @@ class SpacesScreen extends ConsumerWidget {
           const SizedBox(width: 8),
         ],
       ),
-      body: spaces.isEmpty
-          ? EmptyState(
-              icon: Icons.grid_view_rounded,
-              title: 'No spaces yet',
-              body: 'A space is a small community with channels and a shared feed. '
-                  'It exists on its members\' phones — there\'s no server to host it.',
-              action: Column(
-                children: [
-                  FilledButton.icon(
-                    onPressed: () => context.push('/new-space'),
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('Create a space'),
-                  ),
-                  const SizedBox(height: Space.sm),
-                  TextButton(
-                    onPressed: () => context.push('/connect'),
-                    child: Text('I have an invite', style: Txt.bodyStrong(p.muted)),
-                  ),
-                ],
-              ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.only(bottom: Space.xxl),
-              itemCount: spaces.length,
-              separatorBuilder: (_, _) => const Hairline(indent: Space.gutter + 60),
-              itemBuilder: (_, i) => _SpaceRow(space: spaces[i]),
-            ),
+      body: body,
     );
   }
 }
@@ -105,6 +110,10 @@ class _SpaceRow extends ConsumerWidget {
                   Row(
                     children: [
                       Flexible(child: Text(space.name, style: Txt.bodyStrong(p.ink), overflow: TextOverflow.ellipsis)),
+                      if (space.public) ...[
+                        const SizedBox(width: 6),
+                        Text('public', style: Txt.mono(p.accent, size: 10.5)),
+                      ],
                       if (space.owner == me) ...[
                         const SizedBox(width: 6),
                         Text('owner', style: Txt.mono(p.faint, size: 10.5)),

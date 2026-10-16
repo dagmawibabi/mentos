@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../core/device_access.dart';
 import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
@@ -43,7 +44,7 @@ class StoriesBar extends ConsumerWidget {
       height: 104,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: Space.md, vertical: Space.md),
+        padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, Space.sm),
         children: [
           _Bubble(
             id: e.me.id,
@@ -510,8 +511,13 @@ class _StoryComposerState extends ConsumerState<StoryComposer> {
   }
 
   Future<void> _pick(ImageSource src) async {
+    if (src == ImageSource.gallery &&
+        !await allowMediaOrTell(context, images: true, message: 'Photo access is needed to add a picture.')) {
+      return;
+    }
     final x = await ImagePicker().pickImage(source: src, maxWidth: 1600, imageQuality: 85);
-    if (x != null) setState(() => _image = x);
+    if (!mounted || x == null) return;
+    setState(() => _image = x);
   }
 
   Future<void> _post() async {

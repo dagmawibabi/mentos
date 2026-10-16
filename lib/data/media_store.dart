@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../core/crypto/crypto.dart';
+import '../core/device_access.dart';
 import '../net/transport.dart';
 import 'db.dart';
 import 'models.dart';
@@ -308,6 +309,7 @@ class MediaStore {
 
   /// Writes a decrypted copy into Downloads (or Documents if that's missing).
   Future<File?> saveToDevice(MediaRef ref, {List<String> sources = const []}) async {
+    await askToSaveFiles();
     final f = await export(ref, sources: sources);
     if (f == null) return null;
     Directory? dir;

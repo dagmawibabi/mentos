@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/calls/devices.dart';
 import '../net/call/calls.dart';
 import '../net/call/live.dart';
+import '../net/pay/coin.dart';
 import '../net/pay/payments.dart';
 import '../net/transport.dart';
 import 'session.dart';
@@ -63,6 +64,25 @@ final paymentsProvider = Provider<Payments?>((ref) {
   final p = Payments(s.engine);
   ref.onDispose(() => unawaited(p.dispose()));
   return p;
+});
+
+/// The open account's Mentos ledger, or null before the node is up.
+final coinProvider = Provider<CoinLedger?>((ref) {
+  final s = ref.watch(sessionProvider);
+  if (s is! SessionReady) return null;
+  return s.engine.coin;
+});
+
+/// Ticks whenever a Mentos payment is stored or replaced.
+final coinTickProvider = StreamProvider<int>((ref) {
+  final c = ref.watch(coinProvider);
+  if (c == null) return Stream.value(0);
+  var n = 0;
+  return Stream.multi((out) {
+    out.add(n);
+    final sub = c.changes.listen((_) => out.add(++n));
+    out.onCancel = sub.cancel;
+  });
 });
 
 /// Ticks whenever a balance, approval or request changes.

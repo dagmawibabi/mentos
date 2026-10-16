@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Mentos uses your location only while you are sharing a live location in a chat.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Mentos uses your location only while you are sharing a live location in a chat.</string>
 </dict>
 </plist>

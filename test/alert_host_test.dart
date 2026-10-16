@@ -10,6 +10,7 @@ void main() {
   testWidgets(
     'banner host survives the router notifying during its own build',
     (tester) async {
+      final contentKey = GlobalKey(debugLabel: 'alert content');
       final router = GoRouter(
         initialLocation: '/a',
         routes: [
@@ -28,7 +29,10 @@ void main() {
             routerConfig: router,
             builder: (context, child) => AlertHost(
               router: router,
-              child: child ?? const SizedBox.shrink(),
+              child: KeyedSubtree(
+                key: contentKey,
+                child: child ?? const SizedBox.shrink(),
+              ),
             ),
           ),
         ),

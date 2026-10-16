@@ -27,6 +27,13 @@ class TestNetwork {
   /// Drop payment acceptances in flight, to test recovery.
   bool dropApp = false;
 
+  /// Sender ids whose direct messages are refused, as if no QUIC link exists.
+  final dropDirectFrom = <String>{};
+
+  /// Report a topic broadcast as accepted even when nobody is listening.
+  /// A real gossip subscribe can do this before it finds a neighbor.
+  bool acceptBroadcastWithoutPeers = false;
+
   /// topic -> node ids that joined it, for in-process gossip.
   final topics = <String, Set<String>>{};
   Completer<bool>? sendGate;
@@ -41,6 +48,9 @@ class TestTransport implements Transport, MediaLink {
   bool online = true;
   bool started = false;
   final controller = StreamController<NetEvent>.broadcast();
+  @override
+  void setPreferredRelay(String? url) {}
+
   @override
   Stream<NetEvent> get events => controller.stream;
   @override
@@ -61,7 +71,11 @@ class TestTransport implements Transport, MediaLink {
   Future<bool> send(String peer, Uint8List data) async {
     final body = (jsonDecode(utf8.decode(data)) as Map).cast<String, dynamic>();
     final receiver = network.nodes[peer];
-    if (!online || receiver == null || !receiver.online || !receiver.started) {
+    if (!online ||
+        receiver == null ||
+        !receiver.online ||
+        !receiver.started ||
+        network.dropDirectFrom.contains(id)) {
       return false;
     }
     network.messages.add((from: id, to: peer, body: body));
@@ -185,6 +199,7 @@ class TestTransport implements Transport, MediaLink {
       n.controller.add(GossipEvent(topic, id, data));
       any = true;
     }
+    if (!any && network.acceptBroadcastWithoutPeers) return true;
     return any;
   }
   @override

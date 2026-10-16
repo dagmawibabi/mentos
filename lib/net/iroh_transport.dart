@@ -76,6 +76,20 @@ class IrohTransport implements Transport, NetTools, MediaLink {
     }
   }
 
+  String? preferredRelay;
+
+  @override
+  void setPreferredRelay(String? url) {
+    final t = url?.trim();
+    preferredRelay = (t == null || t.isEmpty) ? null : t;
+  }
+
+  String _dial(String peer) {
+    final relay = preferredRelay;
+    if (relay == null || peer.contains('|')) return peer;
+    return '$peer|$relay';
+  }
+
   Uint8List _bytes(Object? v) {
     try {
       if (v is String) return Uint8List.fromList(base64Decode(v));
@@ -97,14 +111,14 @@ class IrohTransport implements Transport, NetTools, MediaLink {
 
   @override
   Future<bool> send(String peer, Uint8List data) async {
-    final ok = await _call('send', peer, data);
+    final ok = await _call('send', _dial(peer), data);
     return ok == true;
   }
 
   @override
   Future<bool> connect(String peer) async {
     try {
-      return _n.connect(peer);
+      return _n.connect(_dial(peer));
     } catch (_) {
       return false;
     }

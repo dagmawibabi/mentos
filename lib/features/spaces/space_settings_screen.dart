@@ -35,8 +35,21 @@ class SpaceSettingsScreen extends ConsumerWidget {
             subtitle: 'Name',
             onTap: owner
                 ? () async {
-                    final n = await prompt(context, title: 'Space name', initial: s.name, maxLength: 48);
-                    if (n != null && n.trim().isNotEmpty) await e.updateSpace(id, (x) => x.copyWith(name: n.trim()));
+                    final n = await prompt(
+                      context,
+                      title: 'Space name',
+                      body: 'People see this on the invite and in their space list.',
+                      initial: s.name,
+                      maxLength: 48,
+                      selectAll: true,
+                      allowEmpty: false,
+                      capitalization: TextCapitalization.words,
+                    );
+                    if (n != null && n.trim().isNotEmpty)
+                      await e.updateSpace(
+                        id,
+                        (x) => x.copyWith(name: n.trim()),
+                      );
                   }
                 : null,
           ),
@@ -46,12 +59,36 @@ class SpaceSettingsScreen extends ConsumerWidget {
             subtitle: 'Description',
             onTap: owner
                 ? () async {
-                    final n = await prompt(context, title: 'Description', initial: s.about, maxLength: 280);
-                    if (n != null) await e.updateSpace(id, (x) => x.copyWith(about: n.trim()));
+                    final n = await prompt(
+                      context,
+                      title: 'Description',
+                      body: 'Shown at the top of the space. Clear it to remove the description.',
+                      initial: s.about,
+                      maxLength: 280,
+                      multiline: true,
+                      minLines: 4,
+                    );
+                    if (n != null)
+                      await e.updateSpace(
+                        id,
+                        (x) => x.copyWith(about: n.trim()),
+                      );
                   }
                 : null,
           ),
-          RowTile(icon: Icons.person_add_alt_rounded, title: 'Invite people', onTap: () => showInvite(context, ref, s)),
+          RowTile(
+            icon: Icons.person_add_alt_rounded,
+            title: 'Invite people',
+            onTap: () => showInvite(context, ref, s),
+          ),
+          if (owner)
+            SwitchTile(
+              icon: Icons.public_rounded,
+              title: 'Public space',
+              subtitle: 'Contacts can see the name and ask to join. The key stays in the invite.',
+              value: s.public,
+              onChanged: (v) => e.updateSpace(id, (x) => x.copyWith(public: v)),
+            ),
           SectionLabel('History and consent'),
           if (owner)
             SwitchTile(
@@ -59,7 +96,8 @@ class SpaceSettingsScreen extends ConsumerWidget {
               title: 'Members may keep history',
               subtitle: 'When off, every message only shows while its author is online.',
               value: s.archive,
-              onChanged: (v) => e.updateSpace(id, (x) => x.copyWith(archive: v)),
+              onChanged: (v) =>
+                  e.updateSpace(id, (x) => x.copyWith(archive: v)),
             ),
           SwitchTile(
             icon: Icons.cloud_done_outlined,
@@ -68,14 +106,17 @@ class SpaceSettingsScreen extends ConsumerWidget {
                 ? 'Hold copies of messages whose authors allow it, and share them with other members.'
                 : 'The owner has turned history off for this space.',
             value: s.preserve && s.archive,
-            onChanged: s.archive ? (v) => e.updateSpace(id, (x) => x.copyWith(preserve: v)) : null,
+            onChanged: s.archive
+                ? (v) => e.updateSpace(id, (x) => x.copyWith(preserve: v))
+                : null,
           ),
           SwitchTile(
             icon: Icons.share_outlined,
             title: 'Let members keep my messages',
             subtitle: 'Applies to messages you send from now on.',
             value: s.shareMine,
-            onChanged: (v) => e.updateSpace(id, (x) => x.copyWith(shareMine: v)),
+            onChanged: (v) =>
+                e.updateSpace(id, (x) => x.copyWith(shareMine: v)),
           ),
           SwitchTile(
             icon: Icons.notifications_off_outlined,
@@ -88,7 +129,8 @@ class SpaceSettingsScreen extends ConsumerWidget {
             icon: Icons.info_outline_rounded,
             title: 'Scope and encryption',
             subtitle: 'space:${s.id}',
-            onTap: () => showScopeTech(context, Scope.spaceMeta(s.id), spaceId: s.id),
+            onTap: () =>
+                showScopeTech(context, Scope.spaceMeta(s.id), spaceId: s.id),
           ),
           if (canEdit) ...[
             SectionLabel('Forum boards'),
@@ -98,26 +140,67 @@ class SpaceSettingsScreen extends ConsumerWidget {
                 title: c.name,
                 onTap: () => showActions(context, [
                   SheetAction(Icons.edit_outlined, 'Rename', () async {
-                    final n = await prompt(context, title: 'Rename board', initial: c.name, maxLength: 32);
-                    final name = n?.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-_]+'), '-');
+                    final name = await askSlug(
+                      context,
+                      title: 'Rename board',
+                      initial: c.name,
+                      action: 'Save',
+                      body: 'Posts stay on this board. The tag is what people see.',
+                      taken: [
+                        for (final y in s.forums)
+                          if (y.id != c.id) y.name,
+                      ],
+                    );
                     if (name == null || name.isEmpty) return;
-                    await e.updateSpace(id, (x) => x.copyWith(
-                        forums: x.forums.map((y) => y.id == c.id ? Channel(c.id, name) : y).toList()));
+                    await e.updateSpace(
+                      id,
+                      (x) => x.copyWith(
+                        forums: x.forums
+                            .map((y) => y.id == c.id ? Channel(c.id, name) : y)
+                            .toList(),
+                      ),
+                    );
                   }),
                   if (s.forums.length > 1)
-                    SheetAction(Icons.delete_outline_rounded, 'Remove', () async {
-                      await e.updateSpace(id, (x) => x.copyWith(forums: x.forums.where((y) => y.id != c.id).toList()));
-                    }, danger: true),
+                    SheetAction(
+                      Icons.delete_outline_rounded,
+                      'Remove',
+                      () async {
+                        await e.updateSpace(
+                          id,
+                          (x) => x.copyWith(
+                            forums: x.forums
+                                .where((y) => y.id != c.id)
+                                .toList(),
+                          ),
+                        );
+                      },
+                      danger: true,
+                    ),
                 ], title: c.name),
               ),
             RowTile(
               icon: Icons.add_rounded,
               title: 'New board',
               onTap: () async {
-                final n = await prompt(context, title: 'New board', hint: 'board-name', action: 'Create', maxLength: 32);
-                final name = n?.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-_]+'), '-');
+                final name = await askSlug(
+                  context,
+                  title: 'New board',
+                  hint: 'board-name',
+                  action: 'Create',
+                  body: 'A board holds posts. The tag is short, like ideas or bugs.',
+                  taken: s.forums.map((b) => b.name).toList(),
+                );
                 if (name == null || name.isEmpty) return;
-                await e.updateSpace(id, (x) => x.copyWith(forums: [...x.forums, Channel(newId().substring(0, 8), name)]));
+                await e.updateSpace(
+                  id,
+                  (x) => x.copyWith(
+                    forums: [
+                      ...x.forums,
+                      Channel(newId().substring(0, 8), name),
+                    ],
+                  ),
+                );
               },
             ),
             SectionLabel('Channels'),
@@ -126,36 +209,86 @@ class SpaceSettingsScreen extends ConsumerWidget {
                 icon: Icons.tag_rounded,
                 title: c.name,
                 onTap: () => showActions(context, [
-                  SheetAction(Icons.edit_outlined, 'Rename', () async {
-                    final n = await prompt(context, title: 'Rename channel', initial: c.name, maxLength: 32);
-                    final name = n?.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-_]+'), '-');
-                    if (name == null || name.isEmpty) return;
-                    await e.updateSpace(id, (x) => x.copyWith(
-                        channels: x.channels.map((y) => y.id == c.id ? Channel(c.id, name, about: c.about) : y).toList()));
-                  }),
-                  SheetAction(Icons.notes_rounded, 'Description', () async {
-                    final drafted = await _askChannel(context, name: c.name, about: c.about, title: 'Channel');
-                    if (drafted == null) return;
-                    await e.updateSpace(id, (x) => x.copyWith(
-                        channels: x.channels.map((y) => y.id == c.id ? Channel(c.id, c.name, about: drafted.about) : y).toList()));
+                  SheetAction(Icons.edit_outlined, 'Edit', () async {
+                    final drafted = await askNamed(
+                      context,
+                      title: '#${c.name}',
+                      name: c.name,
+                      about: c.about,
+                      action: 'Save',
+                      slug: true,
+                      nameMax: 32,
+                      body: 'The tag is what people see. Messages stay in this channel.',
+                      taken: [
+                        for (final y in s.channels)
+                          if (y.id != c.id) y.name,
+                      ],
+                    );
+                    if (drafted == null || drafted.name.isEmpty) return;
+                    await e.updateSpace(
+                      id,
+                      (x) => x.copyWith(
+                        channels: x.channels
+                            .map(
+                              (y) => y.id == c.id
+                                  ? Channel(
+                                      c.id,
+                                      drafted.name,
+                                      about: drafted.about,
+                                    )
+                                  : y,
+                            )
+                            .toList(),
+                      ),
+                    );
                   }),
                   if (s.channels.length > 1)
-                    SheetAction(Icons.delete_outline_rounded, 'Remove', () async {
-                      await e.updateSpace(id, (x) => x.copyWith(channels: x.channels.where((y) => y.id != c.id).toList()));
-                    }, danger: true),
+                    SheetAction(
+                      Icons.delete_outline_rounded,
+                      'Remove',
+                      () async {
+                        await e.updateSpace(
+                          id,
+                          (x) => x.copyWith(
+                            channels: x.channels
+                                .where((y) => y.id != c.id)
+                                .toList(),
+                          ),
+                        );
+                      },
+                      danger: true,
+                    ),
                 ], title: '#${c.name}'),
               ),
             RowTile(
               icon: Icons.add_rounded,
               title: 'New channel',
-              subtitle: 'Name and what it is for',
+              subtitle: 'Tag and what it is for',
               onTap: () async {
-                final drafted = await _askChannel(context);
+                final drafted = await askNamed(
+                  context,
+                  title: 'New channel',
+                  action: 'Create',
+                  slug: true,
+                  nameMax: 32,
+                  nameHint: 'general',
+                  body: 'You post here with the rest of the space. The tag is short, like general or announcements.',
+                  taken: s.channels.map((c) => c.name).toList(),
+                );
                 if (drafted == null || drafted.name.isEmpty) return;
-                final slug = drafted.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-_]+'), '-');
-                if (slug.isEmpty) return;
-                await e.updateSpace(id, (x) => x.copyWith(
-                    channels: [...x.channels, Channel(newId().substring(0, 8), slug, about: drafted.about)]));
+                await e.updateSpace(
+                  id,
+                  (x) => x.copyWith(
+                    channels: [
+                      ...x.channels,
+                      Channel(
+                        newId().substring(0, 8),
+                        drafted.name,
+                        about: drafted.about,
+                      ),
+                    ],
+                  ),
+                );
               },
             ),
           ],
@@ -174,91 +307,24 @@ class SpaceSettingsScreen extends ConsumerWidget {
             title: 'Leave space',
             danger: true,
             onTap: () async {
-              final ok = await confirm(context,
-                  title: 'Leave ${s.name}?',
-                  body: 'Your copy of the space is deleted from this phone. Your messages disappear for others '
-                      'unless members kept them.',
-                  action: 'Leave',
-                  danger: true);
+              final ok = await confirm(
+                context,
+                title: 'Leave ${s.name}?',
+                body:
+                    'Your copy of the space is deleted from this phone. Your messages disappear for others '
+                    'unless members kept them.',
+                action: 'Leave',
+                danger: true,
+              );
               if (!ok) return;
               await e.leaveSpace(id);
-              if (context.mounted) context.go('/spaces');
+              ref.read(inboxPaneProvider.notifier).show(InboxPane.channels);
+              if (context.mounted) context.go('/communities');
             },
           ),
           const SizedBox(height: Space.xxl),
         ],
       ),
-    );
-  }
-}
-
-Future<({String name, String about})?> _askChannel(
-  BuildContext context, {
-  String name = '',
-  String about = '',
-  String title = 'New channel',
-}) {
-  return showDialog<({String name, String about})>(
-    context: context,
-    builder: (ctx) => _ChannelDialog(title: title, name: name, about: about),
-  );
-}
-
-class _ChannelDialog extends StatefulWidget {
-  const _ChannelDialog({required this.title, required this.name, required this.about});
-  final String title;
-  final String name;
-  final String about;
-
-  @override
-  State<_ChannelDialog> createState() => _ChannelDialogState();
-}
-
-class _ChannelDialogState extends State<_ChannelDialog> {
-  late final TextEditingController _name = TextEditingController(text: widget.name);
-  late final TextEditingController _about = TextEditingController(text: widget.about);
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _about.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(widget.title),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _name,
-            autofocus: widget.name.isEmpty,
-            maxLength: 32,
-            decoration: const InputDecoration(hintText: 'Name', counterText: ''),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _about,
-            maxLength: 240,
-            minLines: 2,
-            maxLines: 4,
-            decoration: const InputDecoration(hintText: 'What this channel is for', counterText: ''),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-        FilledButton(
-          onPressed: () {
-            final name = _name.text.trim();
-            if (name.isEmpty) return;
-            Navigator.pop(context, (name: name, about: _about.text.trim()));
-          },
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 }

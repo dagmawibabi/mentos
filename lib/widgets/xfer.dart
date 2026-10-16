@@ -215,16 +215,42 @@ class XferTile extends ConsumerWidget {
   }
 }
 
-class AlertHost extends ConsumerStatefulWidget {
+class AlertHost extends StatelessWidget {
   const AlertHost({super.key, required this.child, required this.router});
   final Widget child;
   final GoRouter router;
 
   @override
-  ConsumerState<AlertHost> createState() => _AlertHostState();
+  Widget build(BuildContext context) {
+    // Banners listen on their own. Rebuilding this stack to show one would
+    // mount the navigator, which carries a GlobalKey, twice in one child list.
+    return Stack(
+      children: [
+        KeyedSubtree(
+          key: const ValueKey<String>('alert-host-content'),
+          child: child,
+        ),
+        Positioned(
+          key: const ValueKey<String>('alert-host-banners'),
+          left: 12,
+          right: 12,
+          top: 0,
+          child: _AlertLayer(router: router),
+        ),
+      ],
+    );
+  }
 }
 
-class _AlertHostState extends ConsumerState<AlertHost> {
+class _AlertLayer extends ConsumerStatefulWidget {
+  const _AlertLayer({required this.router});
+  final GoRouter router;
+
+  @override
+  ConsumerState<_AlertLayer> createState() => _AlertLayerState();
+}
+
+class _AlertLayerState extends ConsumerState<_AlertLayer> {
   String _path = '/';
   bool _routeQueued = false;
 
@@ -236,7 +262,7 @@ class _AlertHostState extends ConsumerState<AlertHost> {
   }
 
   @override
-  void didUpdateWidget(covariant AlertHost oldWidget) {
+  void didUpdateWidget(covariant _AlertLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.router == widget.router) return;
     oldWidget.router.routerDelegate.removeListener(_onRoute);
@@ -291,25 +317,18 @@ class _AlertHostState extends ConsumerState<AlertHost> {
         }
       });
     }
-    return Stack(
-      children: [
-        widget.child,
-        if (visible.isNotEmpty)
-          Positioned(
-            left: 12,
-            right: 12,
-            top: MediaQuery.paddingOf(context).top + 8,
-            child: Column(
-              children: [
-                for (final a in visible.take(3))
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _Banner(a: a, router: widget.router),
-                  ),
-              ],
+    if (visible.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top + 8),
+      child: Column(
+        children: [
+          for (final a in visible.take(3))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _Banner(a: a, router: widget.router),
             ),
-          ),
-      ],
+        ],
+      ),
     );
   }
 }

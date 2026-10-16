@@ -7,9 +7,11 @@ import 'core/theme/tokens.dart';
 import 'features/calls/call_screen.dart';
 import 'state/background.dart';
 import 'state/calls.dart';
+import 'state/live_share.dart';
 import 'state/notifications.dart';
 import 'state/providers.dart';
 import 'state/session.dart';
+import 'features/settings/dev_api.dart';
 import 'features/settings/lock_gate.dart';
 import 'widgets/xfer.dart';
 
@@ -19,17 +21,17 @@ class MentosApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(themeModeProvider);
+    final accent = ref.watch(settingsProvider).accent;
     final session = ref.watch(sessionProvider);
     final router = ref.watch(routerProvider);
     ref.watch(notificationServiceProvider);
     ref.watch(keepAliveProvider);
-    // Payments and live streams listen for messages from the moment the
-    // session opens, not only while their screens are visible.
-    ref.watch(paymentsProvider);
+    ref.watch(devApiProvider);
     ref.watch(liveManagerProvider);
     ref.watch(callManagerProvider);
-    final light = buildTheme(Palette.light);
-    final dark = buildTheme(Palette.dark);
+    ref.watch(liveShareProvider);
+    final light = buildTheme(Palette.light.withAccent(accent));
+    final dark = buildTheme(Palette.dark.withAccent(accent));
     // Keep the navigator out of the tree until the node is open so Feed/You
     // never call engineProvider during splash (that crashed mobile).
     if (session is SessionLoading) {

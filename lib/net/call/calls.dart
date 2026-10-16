@@ -248,7 +248,9 @@ class CallManager {
     final c = _call;
     if (c == null || c.phase == CallPhase.ended) return;
     c.phase = CallPhase.ended;
+    c.camera = false;
     c.reason = result;
+    _changed();
     _ring?.cancel();
     _connect?.cancel();
     _pump?.cancel();

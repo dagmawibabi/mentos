@@ -109,6 +109,12 @@ class NotificationService with WidgetsBindingObserver {
     } catch (_) {
       _ready = false;
     }
+    // Notifications default to on, so ask once the screen is up. The settings
+    // switch only asks when someone turns it from off to on, which never
+    // happens on a fresh install.
+    if (_ready && engine.settings.systemNotify) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(requestPermission()));
+    }
   }
 
   /// Asks the OS for permission (Android 13+, iOS). Returns whether granted.

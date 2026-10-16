@@ -12,8 +12,10 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
 import '../../net/views.dart';
+import '../../state/calls.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
+import '../../widgets/link_card.dart';
 import '../../widgets/media.dart';
 import '../../widgets/nsfw.dart';
 import '../../widgets/ui.dart';
@@ -33,14 +35,24 @@ void showViewers(BuildContext context, WidgetRef ref, PostView post) {
       final p = ctx.pal;
       return SafeArea(
         child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * .7),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(ctx).height * .7,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm),
-                child: Text('${post.views} ${post.views == 1 ? 'view' : 'views'}', style: Txt.title(p.ink)),
+                padding: const EdgeInsets.fromLTRB(
+                  Space.gutter,
+                  0,
+                  Space.gutter,
+                  Space.sm,
+                ),
+                child: Text(
+                  '${post.views} ${post.views == 1 ? 'view' : 'views'}',
+                  style: Txt.title(p.ink),
+                ),
               ),
               if (post.viewers.isEmpty)
                 Padding(
@@ -94,7 +106,8 @@ class _ImpressionState extends ConsumerState<_Impression> {
     _timer = Timer(const Duration(milliseconds: 1200), () {
       if (!mounted) return;
       final e = ref.read(maybeEngineProvider);
-      if (e != null && widget.post.author != e.me.id) unawaited(e.recordView(widget.post.item));
+      if (e != null && widget.post.author != e.me.id)
+        unawaited(e.recordView(widget.post.item));
     });
   }
 
@@ -118,138 +131,250 @@ class PostCard extends ConsumerWidget {
     final p = context.pal;
     final e = ref.read(engineProvider);
     final author = ref.watch(peerProvider(post.author)).value;
-    final name = post.author == e.me.id ? (e.myProfile.displayName) : (author?.name ?? alias(post.author));
+    final name = post.author == e.me.id
+        ? (e.myProfile.displayName)
+        : (author?.name ?? alias(post.author));
     final prov = ProvenanceTag.of(post.item);
+
+    final hasBody =
+        post.title.isNotEmpty ||
+        post.text.isNotEmpty ||
+        post.repost != null ||
+        post.media.isNotEmpty ||
+        post.poll != null;
 
     return _Impression(
       post: post,
-      child: Pressable(
-        onTap: detailed
-            ? null
-            : () async {
-                final files = post.media.where((m) => !m.isImage && !m.isVideo && !m.isAudio).toList();
-                if (files.length == 1 && post.text.isEmpty && post.poll == null) {
-                  final f = await e.openMedia(files.first, post.item);
-                  if (!context.mounted) return;
-                  if (f == null) {
-                    toast(context, 'File not reachable — the sender is offline.');
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          Space.gutter,
+          detailed ? Space.md : 0,
+          Space.gutter,
+          detailed ? Space.sm : Space.md,
+        ),
+        child: Pressable(
+          onTap: detailed
+              ? null
+              : () async {
+                  final files = post.media
+                      .where((m) => !m.isImage && !m.isVideo && !m.isAudio)
+                      .toList();
+                  if (files.length == 1 &&
+                      post.text.isEmpty &&
+                      post.poll == null) {
+                    final f = await e.openMedia(files.first, post.item);
+                    if (!context.mounted) return;
+                    if (f == null) {
+                      toast(
+                        context,
+                        'File not reachable — the sender is offline.',
+                      );
+                      return;
+                    }
+                    await OpenFilex.open(f.path, type: files.first.mime);
                     return;
                   }
-                  await OpenFilex.open(f.path, type: files.first.mime);
-                  return;
-                }
-                context.push('/post/${post.id}');
-              },
-        onLongPress: () => showPostActions(context, ref, post),
-        child: Container(
-          color: Colors.transparent,
-          padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, Space.sm),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => context.push(post.author == e.me.id ? '/me' : '/u/${post.author}'),
-                    child: Avatar(id: post.author, size: 38),
-                  ),
-                  const SizedBox(width: Space.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                  context.push('/post/${post.id}');
+                },
+          onLongPress: () => showPostActions(context, ref, post),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: p.surface,
+              borderRadius: BorderRadius.circular(Radii.lg),
+              border: Border.all(color: p.line),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(Space.lg, Space.sm, 2, 0),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => context.push(
+                          post.author == e.me.id ? '/me' : '/u/${post.author}',
+                        ),
+                        child: Avatar(id: post.author, size: 38),
+                      ),
+                      const SizedBox(width: Space.md),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Flexible(
-                              child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Txt.bodyStrong(p.ink),
+                                  ),
+                                ),
+                                if (_badge(ref, post.author)) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.verified_rounded,
+                                    size: 15,
+                                    color: p.accent,
+                                  ),
+                                ],
+                                if (post.ai) ...[
+                                  const SizedBox(width: 6),
+                                  _Flag('AI', fg: p.danger, bg: p.dangerSoft),
+                                ],
+                                if (post.nsfw) ...[
+                                  const SizedBox(width: 6),
+                                  _Flag('NSFW', fg: p.danger, bg: p.dangerSoft),
+                                ],
+                                if (prov != Provenance.mine) ...[
+                                  const SizedBox(width: 6),
+                                  ProvenanceTag(prov, compact: true),
+                                ],
+                              ],
                             ),
-                            if (post.ai) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                                decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
-                                child: Text('AI', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
-                              ),
-                            ],
-                            if (post.nsfw) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                                decoration: BoxDecoration(border: Border.all(color: p.line), borderRadius: BorderRadius.circular(Radii.pill)),
-                                child: Text('NSFW', style: Txt.mono(p.muted, size: 10, w: FontWeight.w600)),
-                              ),
-                            ],
-                            if (prov != Provenance.mine) ...[
-                              const SizedBox(width: 6),
-                              ProvenanceTag(prov, compact: true),
-                            ],
+                            const SizedBox(height: 2),
+                            Text(
+                              [
+                                timeAgo(post.item.ts),
+                                if (post.edited) 'edited',
+                                if (post.spaceId != null) 'in space',
+                              ].join(' · '),
+                              style: Txt.mono(p.muted, size: 11),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 1),
-                        Text(
-                          [timeAgo(post.item.ts), if (post.edited) 'edited', if (post.spaceId != null) 'in space']
-                              .join(' · '),
-                          style: Txt.mono(p.muted, size: 11),
-                        ),
-                      ],
-                    ),
+                      ),
+                      IconBtn(
+                        Icons.more_horiz_rounded,
+                        color: p.muted,
+                        size: 20,
+                        onTap: () => showPostActions(context, ref, post),
+                      ),
+                    ],
                   ),
-                  IconBtn(Icons.more_horiz_rounded,
-                      color: p.muted, size: 20, onTap: () => showPostActions(context, ref, post)),
-                ],
-              ),
-              NsfwGate(
-                nsfw: post.nsfw,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (post.title.isNotEmpty) ...[
-                      const SizedBox(height: Space.md),
-                      Text(post.title, style: Txt.heading(p.ink)),
-                    ],
-                    if (post.text.isNotEmpty) ...[
-                      SizedBox(height: post.title.isEmpty ? Space.md : Space.sm),
-                      Text(
-                        post.text,
-                        style: detailed ? Txt.body(p.ink).copyWith(fontSize: 17, height: 1.45) : Txt.body(p.ink),
-                        maxLines: detailed ? null : 12,
-                        overflow: detailed ? null : TextOverflow.ellipsis,
-                      ),
-                    ],
-                    if (post.repost != null) ...[
-                      const SizedBox(height: Space.md),
-                      RepostEmbed(data: post.repost!),
-                    ],
-                    if (post.media.any((m) => m.isImage || m.isVideo)) ...[
-                      const SizedBox(height: Space.md),
-                      MediaGrid(media: post.media, item: post.item),
-                    ],
-                    for (final m in post.media.where((m) => !m.isImage && !m.isVideo)) ...[
-                      const SizedBox(height: Space.sm),
-                      m.isAudio
-                          ? Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(Radii.md)),
-                              child: VoicePlayer(media: m, item: post.item, fg: p.ink, track: p.raised),
-                            )
-                          : FileTile(media: m, item: post.item, fg: p.ink, bg: p.raised),
-                    ],
-                    if (post.poll != null) ...[
-                      const SizedBox(height: Space.md),
-                      PollView(
-                        state: post.poll!,
-                        onVote: (i) => e.vote(post.scope, post.id, post.poll!.myVote == i ? null : i),
-                      ),
-                    ],
-                  ],
                 ),
-              ),
-              const SizedBox(height: Space.sm),
-              _Actions(post: post),
-            ],
+                if (hasBody)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      Space.lg,
+                      Space.md,
+                      Space.lg,
+                      Space.lg,
+                    ),
+                    child: NsfwGate(
+                      nsfw: post.nsfw,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (post.title.isNotEmpty)
+                            Text(post.title, style: Txt.heading(p.ink)),
+                          if (post.text.isNotEmpty) ...[
+                            if (post.title.isNotEmpty)
+                              const SizedBox(height: Space.sm),
+                            _TaggedText(text: post.text, detailed: detailed),
+                            LinkCard(text: post.text, attached: post.preview),
+                          ],
+                          if (post.repost != null) ...[
+                            if (post.title.isNotEmpty || post.text.isNotEmpty)
+                              const SizedBox(height: Space.md),
+                            RepostEmbed(data: post.repost!),
+                          ],
+                          if (post.media.any(
+                            (m) => m.isImage || m.isVideo,
+                          )) ...[
+                            if (post.title.isNotEmpty ||
+                                post.text.isNotEmpty ||
+                                post.repost != null)
+                              const SizedBox(height: Space.md),
+                            MediaGrid(media: post.media, item: post.item),
+                          ],
+                          for (final m in post.media.where(
+                            (m) => !m.isImage && !m.isVideo,
+                          )) ...[
+                            const SizedBox(height: Space.sm),
+                            m.isAudio
+                                ? Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: p.raised,
+                                      borderRadius: BorderRadius.circular(
+                                        Radii.md,
+                                      ),
+                                    ),
+                                    child: VoicePlayer(
+                                      media: m,
+                                      item: post.item,
+                                      fg: p.ink,
+                                      track: p.raised,
+                                    ),
+                                  )
+                                : FileTile(
+                                    media: m,
+                                    item: post.item,
+                                    fg: p.ink,
+                                    bg: p.raised,
+                                  ),
+                          ],
+                          if (post.poll != null) ...[
+                            if (post.title.isNotEmpty ||
+                                post.text.isNotEmpty ||
+                                post.repost != null ||
+                                post.media.isNotEmpty)
+                              const SizedBox(height: Space.md),
+                            PollView(
+                              state: post.poll!,
+                              onVote: (i) => e.vote(
+                                post.scope,
+                                post.id,
+                                post.poll!.myVote == i ? null : i,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  const SizedBox(height: Space.md),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border(top: BorderSide(color: p.line)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      Space.sm,
+                      2,
+                      Space.sm,
+                      2,
+                    ),
+                    child: _Actions(post: post),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _Flag extends StatelessWidget {
+  const _Flag(this.label, {required this.fg, required this.bg});
+  final String label;
+  final Color fg;
+  final Color bg;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
+      child: Text(label, style: Txt.mono(fg, size: 10, w: FontWeight.w600)),
     );
   }
 }
@@ -265,13 +390,18 @@ class _Actions extends ConsumerWidget {
     return Row(
       children: [
         _Action(
-          icon: post.liked ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+          icon: post.liked
+              ? Icons.favorite_rounded
+              : Icons.favorite_border_rounded,
           color: post.liked ? p.ink : p.muted,
           count: post.likes,
           onTap: () {
             HapticFeedback.lightImpact();
             e.like(post.scope, post.id, !post.liked);
           },
+          onCount: post.author == e.me.id
+              ? () => showLikers(context, ref, post)
+              : null,
         ),
         _Action(
           icon: Icons.mode_comment_outlined,
@@ -298,7 +428,9 @@ class _Actions extends ConsumerWidget {
             onTap: () => showViewers(context, ref, post),
           ),
         _Action(
-          icon: post.bookmarked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+          icon: post.bookmarked
+              ? Icons.bookmark_rounded
+              : Icons.bookmark_border_rounded,
           color: post.bookmarked ? p.ink : p.muted,
           onTap: () {
             HapticFeedback.selectionClick();
@@ -310,11 +442,108 @@ class _Actions extends ConsumerWidget {
   }
 }
 
+bool _badge(WidgetRef ref, String id) {
+  final coin = ref.watch(coinProvider);
+  if (coin == null) return false;
+  return coin.hasBadge(id);
+}
+
+void showLikers(BuildContext context, WidgetRef ref, PostView post) {
+  final e = ref.read(engineProvider);
+  showModalBottomSheet<void>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(Space.gutter),
+            child: Text(
+              '${post.likes} ${post.likes == 1 ? 'like' : 'likes'}',
+              style: Txt.title(ctx.pal.ink),
+            ),
+          ),
+          if (post.likers.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(Space.gutter),
+              child: Text('Names show for likes this phone has seen.'),
+            ),
+          for (final id in post.likers)
+            ListTile(
+              leading: Avatar(id: id, size: 34),
+              title: Text(e.nameOf(id)),
+              onTap: () {
+                Navigator.pop(ctx);
+                context.push('/u/$id');
+              },
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _TaggedText extends ConsumerWidget {
+  const _TaggedText({required this.text, required this.detailed});
+  final String text;
+  final bool detailed;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.pal;
+    final style = detailed
+        ? Txt.body(p.ink).copyWith(fontSize: 17, height: 1.45)
+        : Txt.body(p.ink);
+    final parts = text.split(RegExp(r'(?=#\w)'));
+    if (parts.length == 1) {
+      return Text(
+        text,
+        style: style,
+        maxLines: detailed ? null : 12,
+        overflow: detailed ? null : TextOverflow.ellipsis,
+      );
+    }
+    return Text.rich(
+      TextSpan(
+        style: style,
+        children: [
+          for (final part in parts)
+            if (part.startsWith('#'))
+              TextSpan(
+                text: part.split(RegExp(r'\s')).first,
+                style: style.copyWith(color: p.accent),
+                children: [
+                  if (part.contains(' '))
+                    TextSpan(
+                      text: part.substring(
+                        part.split(RegExp(r'\s')).first.length,
+                      ),
+                      style: style,
+                    ),
+                ],
+              )
+            else
+              TextSpan(text: part),
+        ],
+      ),
+      maxLines: detailed ? null : 12,
+      overflow: detailed ? TextOverflow.visible : TextOverflow.ellipsis,
+    );
+  }
+}
+
 class _Action extends StatelessWidget {
-  const _Action({required this.icon, required this.color, required this.onTap, this.count});
+  const _Action({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    this.count,
+    this.onCount,
+  });
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
+  final VoidCallback? onCount;
   final int? count;
 
   @override
@@ -334,7 +563,13 @@ class _Action extends StatelessWidget {
             ),
             if (count != null && count! > 0) ...[
               const SizedBox(width: 5),
-              Text(compact(count!), style: Txt.mono(p.muted, size: 12)),
+              GestureDetector(
+                onTap: onCount,
+                child: Text(
+                  compact(count!),
+                  style: Txt.mono(p.muted, size: 12),
+                ),
+              ),
             ],
             if (count == null || count == 0) const SizedBox(width: 4),
           ],
@@ -371,13 +606,23 @@ class RepostEmbed extends ConsumerWidget {
               children: [
                 Avatar(id: author, size: 20, presence: false),
                 const SizedBox(width: 8),
-                Expanded(child: Text(peer?.name ?? alias(author), style: Txt.small(p.ink).copyWith(fontWeight: FontWeight.w500))),
-                ProvenanceTag(live == null ? Provenance.local : ProvenanceTag.of(live.item), compact: true),
+                Expanded(
+                  child: Text(
+                    peer?.name ?? alias(author),
+                    style: Txt.small(p.ink)
+                        .copyWith(fontWeight: FontWeight.w500),
+                  ),
+                ),
+                ProvenanceTag(
+                  live == null ? Provenance.local : ProvenanceTag.of(live.item),
+                  compact: true,
+                ),
               ],
             ),
             const SizedBox(height: 6),
             Text(
-              live?.text ?? (data['text'] is String ? data['text'] as String : ''),
+              live?.text ??
+                  (data['text'] is String ? data['text'] as String : ''),
               maxLines: 4,
               overflow: TextOverflow.ellipsis,
               style: Txt.small(live == null ? p.muted : p.inkSoft),
@@ -385,7 +630,10 @@ class RepostEmbed extends ConsumerWidget {
             if (live == null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text('Original shows when its author is online', style: Txt.mono(p.faint, size: 10.5)),
+                child: Text(
+                  'Original shows when its author is online',
+                  style: Txt.mono(p.faint, size: 10.5),
+                ),
               ),
           ],
         ),
@@ -395,7 +643,13 @@ class RepostEmbed extends ConsumerWidget {
 }
 
 class PollView extends StatelessWidget {
-  const PollView({super.key, required this.state, required this.onVote, this.fg, this.track});
+  const PollView({
+    super.key,
+    required this.state,
+    required this.onVote,
+    this.fg,
+    this.track,
+  });
   final PollState state;
   final ValueChanged<int> onVote;
   final Color? fg;
@@ -419,45 +673,67 @@ class PollView extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 6),
             child: GestureDetector(
               onTap: state.locked ? null : () => onVote(i),
-              child: LayoutBuilder(builder: (context, c) {
-                final frac = state.total == 0 ? 0.0 : state.counts[i] / state.total;
-                final mine = state.myVote == i;
-                return Container(
-                  height: 40,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(Radii.sm + 2),
-                    border: Border.all(color: mine ? p.accent : p.line),
-                  ),
-                  child: Stack(
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final frac = state.total == 0
+                      ? 0.0
+                      : state.counts[i] / state.total;
+                  final mine = state.myVote == i;
+                  return Container(
+                    height: 40,
                     alignment: Alignment.center,
-                    children: [
-                      AnimatedContainer(
-                        duration: Motion.slow,
-                        curve: Motion.curve,
-                        width: voted ? c.maxWidth * frac : 0,
-                        decoration: BoxDecoration(
-                          color: mine ? p.accentSoft : bg,
-                          borderRadius: BorderRadius.circular(Radii.sm + 1),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(Radii.sm + 2),
+                      border: Border.all(color: mine ? p.accent : p.line),
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        AnimatedContainer(
+                          duration: Motion.slow,
+                          curve: Motion.curve,
+                          width: voted ? c.maxWidth * frac : 0,
+                          decoration: BoxDecoration(
+                            color: mine ? p.accentSoft : bg,
+                            borderRadius: BorderRadius.circular(Radii.sm + 1),
+                          ),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Row(
-                          children: [
-                            if (mine) ...[Icon(Icons.check_rounded, size: 16, color: p.accent), const SizedBox(width: 6)],
-                            Expanded(
-                              child: Text(state.poll.options[i],
-                                  maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(ink)),
-                            ),
-                            if (voted) Text('${(frac * 100).round()}%', style: Txt.mono(ink.withValues(alpha: .7), size: 12)),
-                          ],
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: Row(
+                            children: [
+                              if (mine) ...[
+                                Icon(
+                                  Icons.check_rounded,
+                                  size: 16,
+                                  color: p.accent,
+                                ),
+                                const SizedBox(width: 6),
+                              ],
+                              Expanded(
+                                child: Text(
+                                  state.poll.options[i],
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Txt.small(ink),
+                                ),
+                              ),
+                              if (voted)
+                                Text(
+                                  '${(frac * 100).round()}%',
+                                  style: Txt.mono(
+                                    ink.withValues(alpha: .7),
+                                    size: 12,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                );
-              }),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
           ),
         Text(
@@ -469,7 +745,11 @@ class PollView extends StatelessWidget {
   }
 }
 
-Future<void> showPostActions(BuildContext context, WidgetRef ref, PostView post) {
+Future<void> showPostActions(
+  BuildContext context,
+  WidgetRef ref,
+  PostView post,
+) {
   final e = ref.read(engineProvider);
   final mine = post.author == e.me.id;
   return showActions(context, [
@@ -478,37 +758,74 @@ Future<void> showPostActions(BuildContext context, WidgetRef ref, PostView post)
         Clipboard.setData(ClipboardData(text: post.text));
         toast(context, 'Copied');
       }),
-    SheetAction(post.bookmarked ? Icons.bookmark_remove_outlined : Icons.bookmark_add_outlined,
-        post.bookmarked ? 'Remove bookmark' : 'Bookmark', () => e.setBookmark(post, !post.bookmarked)),
-    SheetAction(Icons.send_outlined, 'Send in a chat', () => showShareSheet(context, ref, post)),
+    SheetAction(
+      post.bookmarked
+          ? Icons.bookmark_remove_outlined
+          : Icons.bookmark_add_outlined,
+      post.bookmarked ? 'Remove bookmark' : 'Bookmark',
+      () => e.setBookmark(post, !post.bookmarked),
+    ),
+    SheetAction(
+      Icons.send_outlined,
+      'Send in a chat',
+      () => showShareSheet(context, ref, post),
+    ),
     SheetAction(Icons.ios_share_rounded, 'Share outside Mentos', () {
-      SharePlus.instance.share(ShareParams(text: post.text.isEmpty ? 'A post on Mentos' : post.text));
+      SharePlus.instance.share(
+        ShareParams(text: post.text.isEmpty ? 'A post on Mentos' : post.text),
+      );
     }),
     if (mine) ...[
       if (post.poll != null && !post.poll!.locked)
-        SheetAction(Icons.stop_circle_outlined, 'Stop poll', () => e.closePoll(post.item)),
+        SheetAction(
+          Icons.stop_circle_outlined,
+          'Stop poll',
+          () => e.closePoll(post.item),
+        ),
       SheetAction(Icons.edit_outlined, 'Edit', () async {
-        final t = await prompt(context, title: 'Edit post', initial: post.text, maxLength: 2000);
-        if (t != null && t.trim().isNotEmpty && t != post.text) await e.edit(post.scope, post.id, t.trim());
+        final t = await prompt(
+          context,
+          title: 'Edit post',
+          body: 'People who already have this post see the new text.',
+          initial: post.text,
+          maxLength: 2000,
+          action: 'Save',
+          allowEmpty: false,
+        );
+        if (t != null && t.trim().isNotEmpty && t != post.text)
+          await e.edit(post.scope, post.id, t.trim());
       }),
       SheetAction(Icons.delete_outline_rounded, 'Delete everywhere', () async {
-        final ok = await confirm(context,
-            title: 'Delete this post?',
-            body: 'It is removed from this phone and peers who kept a copy are told to delete theirs.',
-            action: 'Delete',
-            danger: true);
+        final ok = await confirm(
+          context,
+          title: 'Delete this post?',
+          body: 'It is removed from this phone and peers who kept a copy are told to delete theirs.',
+          action: 'Delete',
+          danger: true,
+        );
         if (ok) await e.deleteItem(post.item);
       }, danger: true),
     ] else ...[
-      SheetAction(Icons.person_outline_rounded, 'View profile', () => context.push('/u/${post.author}')),
-      SheetAction(Icons.block_rounded, 'Block ${e.nameOf(post.author)}', () async {
-        final ok = await confirm(context,
+      SheetAction(
+        Icons.person_outline_rounded,
+        'View profile',
+        () => context.push('/u/${post.author}'),
+      ),
+      SheetAction(
+        Icons.block_rounded,
+        'Block ${e.nameOf(post.author)}',
+        () async {
+          final ok = await confirm(
+            context,
             title: 'Block ${e.nameOf(post.author)}?',
             body: 'You won\'t see their posts or messages, and anything of theirs kept here is deleted.',
             action: 'Block',
-            danger: true);
-        if (ok) await e.block(post.author, true);
-      }, danger: true),
+            danger: true,
+          );
+          if (ok) await e.block(post.author, true);
+        },
+        danger: true,
+      ),
     ],
   ]);
 }

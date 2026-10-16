@@ -46,7 +46,7 @@ use tokio::{
 const DIRECT_ALPN: &[u8] = b"mentos/0";
 const BLOB_ALPN: &[u8] = b"mentos-blob/0";
 const MAX_DIRECT: usize = 2 * 1024 * 1024;
-const MAX_BLOB: u64 = 80 * 1024 * 1024;
+const MAX_BLOB: u64 = 512 * 1024 * 1024;
 const MAX_EVENTS: usize = 256;
 const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 /// Both peers must agree on this. A frame over the limit is not rejected by
@@ -861,9 +861,23 @@ fn stop_inner() -> i32 {
     0
 }
 
+fn resolve_peer(n: &Node, raw: &str) -> Result<EndpointId> {
+    let raw = raw.trim();
+    if let Some((id, relay)) = raw.split_once('|') {
+        let mut addr = EndpointAddr::from(parse_id(id)?);
+        if let Ok(url) = relay.parse() {
+            addr = addr.with_relay_url(url);
+        }
+        let id = addr.id;
+        n.remember(addr);
+        return Ok(id);
+    }
+    parse_id(raw)
+}
+
 fn send_inner(peer: *const c_char, data: *const u8, len: usize) -> i32 {
-    let peer = match cstr(peer).and_then(|s| parse_id(&s)) {
-        Ok(p) => p,
+    let raw = match cstr(peer) {
+        Ok(s) => s,
         Err(e) => {
             set_err(e);
             return 0;
@@ -880,8 +894,15 @@ fn send_inner(peer: *const c_char, data: *const u8, len: usize) -> i32 {
             return 0;
         }
     };
+    let id = match resolve_peer(&n, &raw) {
+        Ok(p) => p,
+        Err(e) => {
+            set_err(e);
+            return 0;
+        }
+    };
     let sent = wait(async move {
-        match tokio::time::timeout(Duration::from_secs(20), n.send_bytes(peer, &buf)).await {
+        match tokio::time::timeout(Duration::from_secs(20), n.send_bytes(id, &buf)).await {
             Ok(Ok(())) => true,
             Ok(Err(e)) => {
                 set_err(e);
@@ -904,8 +925,8 @@ fn send_inner(peer: *const c_char, data: *const u8, len: usize) -> i32 {
 }
 
 fn connect_inner(peer: *const c_char) -> i32 {
-    let peer = match cstr(peer).and_then(|s| parse_id(&s)) {
-        Ok(p) => p,
+    let raw = match cstr(peer) {
+        Ok(s) => s,
         Err(e) => {
             set_err(e);
             return 0;
@@ -918,8 +939,15 @@ fn connect_inner(peer: *const c_char) -> i32 {
             return 0;
         }
     };
+    let id = match resolve_peer(&n, &raw) {
+        Ok(p) => p,
+        Err(e) => {
+            set_err(e);
+            return 0;
+        }
+    };
     go(async move {
-        match tokio::time::timeout(Duration::from_secs(20), n.get_direct(peer)).await {
+        match tokio::time::timeout(Duration::from_secs(20), n.get_direct(id)).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => set_err(e),
             Err(_) => set_err("connect timed out"),

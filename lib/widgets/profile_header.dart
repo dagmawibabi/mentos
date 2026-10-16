@@ -36,9 +36,9 @@ class ProfileHeader extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Avatar(id: id, size: 76, presence: false),
+              Avatar(id: id, size: 72, presence: false),
               const SizedBox(width: Space.md),
               Expanded(
                 child: Column(
@@ -46,7 +46,9 @@ class ProfileHeader extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        Flexible(child: Text(name, style: Txt.display(p.ink).copyWith(fontSize: 22))),
+                        Flexible(
+                          child: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.display(p.ink).copyWith(fontSize: 22, height: 1.15)),
+                        ),
                         if (onEdit != null)
                           IconBtn(Icons.edit_outlined, size: 18, color: p.muted, tooltip: 'Edit profile', onTap: onEdit),
                       ],
@@ -69,33 +71,36 @@ class ProfileHeader extends StatelessWidget {
                             decoration: BoxDecoration(shape: BoxShape.circle, color: online ? p.accent : p.danger),
                           ),
                           const SizedBox(width: 6),
-                          Text(status!, style: Txt.mono(online ? p.accent : p.muted, size: 11)),
+                          Flexible(child: Text(status!, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.mono(online ? p.accent : p.muted, size: 11))),
                         ],
                       ),
                     ],
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: Space.lg,
-                      runSpacing: 8,
-                      children: [
-                        for (final s in stats)
-                          GestureDetector(
-                            onTap: s.$3,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(compact(s.$1), style: Txt.heading(p.ink)),
-                                Text(s.$2, style: Txt.mono(p.muted, size: 11)),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
                   ],
                 ),
               ),
             ],
           ),
+          if (stats.isNotEmpty) ...[
+            const SizedBox(height: Space.lg),
+            Row(
+              children: [
+                for (final s in stats)
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: s.$3,
+                      behavior: HitTestBehavior.opaque,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(compact(s.$1), style: Txt.heading(p.ink)),
+                          Text(s.$2, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.mono(p.muted, size: 11)),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
           if (bio.isNotEmpty) ...[
             const SizedBox(height: Space.md),
             Text(bio, style: Txt.body(p.inkSoft)),

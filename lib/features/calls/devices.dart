@@ -3,6 +3,8 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
@@ -65,8 +67,38 @@ Uint8List yuvToJpeg(YuvFrame f, {int maxSide = 240, int quality = 45}) {
   return img.encodeJpg(upright, quality: quality);
 }
 
+/// One BGRA frame, the layout desktop and some phone cameras actually deliver.
+class BgraFrame {
+  const BgraFrame({required this.width, required this.height, required this.row, required this.bytes, required this.rotation});
+  final int width;
+  final int height;
+  final int row;
+  final Uint8List bytes;
+  final int rotation;
+}
+
+/// Downscales a packed BGRA frame and encodes it as JPEG for the call.
+Uint8List bgraToJpeg(BgraFrame f, {int maxSide = 240, int quality = 45}) {
+  final scale = (f.width > f.height ? f.width : f.height) / maxSide;
+  final step = scale < 1 ? 1.0 : scale;
+  final w = (f.width / step).floor().clamp(1, f.width);
+  final h = (f.height / step).floor().clamp(1, f.height);
+  final out = img.Image(width: w, height: h);
+  for (var oy = 0; oy < h; oy++) {
+    final sy = (oy * step).floor();
+    for (var ox = 0; ox < w; ox++) {
+      final sx = (ox * step).floor();
+      final i = sy * f.row + sx * 4;
+      if (i + 2 >= f.bytes.length) continue;
+      out.setPixelRgb(ox, oy, f.bytes[i + 2], f.bytes[i + 1], f.bytes[i]);
+    }
+  }
+  final upright = f.rotation % 360 == 0 ? out : img.copyRotate(out, angle: f.rotation);
+  return img.encodeJpg(upright, quality: quality);
+}
+
 /// Microphone, speaker and camera on a real phone.
-class PhoneDevices implements CallDevices {
+class PhoneDevices extends ChangeNotifier implements CallDevices {
   final _rec = AudioRecorder();
   final _mic = StreamController<Uint8List>.broadcast();
   final _cam = StreamController<Uint8List>.broadcast();
@@ -135,13 +167,16 @@ class PhoneDevices implements CallDevices {
   Future<void> setVideo(bool on) async {
     if (!on) {
       final c = _camera;
+      if (c == null) return;
       _camera = null;
-      if (c != null) {
-        try {
-          await c.stopImageStream();
-        } catch (_) {}
+      notifyListeners();
+      await _afterFrame();
+      try {
+        await c.stopImageStream();
+      } catch (_) {}
+      try {
         await c.dispose();
-      }
+      } catch (_) {}
       return;
     }
     if (_camera != null || !await Permission.camera.isGranted) return;
@@ -154,30 +189,54 @@ class PhoneDevices implements CallDevices {
 
   Future<void> _open() async {
     final desc = _cameras[_cameraIndex];
-    final c = CameraController(desc, ResolutionPreset.low, enableAudio: false, imageFormatGroup: ImageFormatGroup.yuv420);
+    final desktop = defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS ||
+        defaultTargetPlatform == TargetPlatform.linux;
+    final c = CameraController(
+      desc,
+      ResolutionPreset.low,
+      enableAudio: false,
+      imageFormatGroup: desktop ? ImageFormatGroup.bgra8888 : ImageFormatGroup.yuv420,
+    );
     await c.initialize();
     _camera = c;
+    notifyListeners();
     // Frames arrive in sensor orientation; turning by it makes them upright
     // for a phone held in portrait. The front sensor is not mirrored, so the
     // other side sees you as others would, not as a selfie preview.
     final rotation = desc.sensorOrientation;
     await c.startImageStream((image) {
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (_encoding || now - _lastFrame < 1000 ~/ fps || image.planes.length < 3) return;
+      if (_encoding || now - _lastFrame < 1000 ~/ fps || image.planes.isEmpty) return;
       _encoding = true;
       _lastFrame = now;
-      final frame = YuvFrame(
-        width: image.width,
-        height: image.height,
-        y: Uint8List.fromList(image.planes[0].bytes),
-        u: Uint8List.fromList(image.planes[1].bytes),
-        v: Uint8List.fromList(image.planes[2].bytes),
-        yRow: image.planes[0].bytesPerRow,
-        uvRow: image.planes[1].bytesPerRow,
-        uvPixel: image.planes[1].bytesPerPixel ?? 1,
-        rotation: rotation,
-      );
-      Isolate.run(() => yuvToJpeg(frame)).then(_cam.add).whenComplete(() => _encoding = false);
+      final Future<Uint8List> jpeg;
+      if (image.format.group == ImageFormatGroup.jpeg) {
+        jpeg = Future.value(Uint8List.fromList(image.planes.first.bytes));
+      } else if (image.planes.length >= 3) {
+        final frame = YuvFrame(
+          width: image.width,
+          height: image.height,
+          y: Uint8List.fromList(image.planes[0].bytes),
+          u: Uint8List.fromList(image.planes[1].bytes),
+          v: Uint8List.fromList(image.planes[2].bytes),
+          yRow: image.planes[0].bytesPerRow,
+          uvRow: image.planes[1].bytesPerRow,
+          uvPixel: image.planes[1].bytesPerPixel ?? 1,
+          rotation: rotation,
+        );
+        jpeg = Isolate.run(() => yuvToJpeg(frame));
+      } else {
+        final frame = BgraFrame(
+          width: image.width,
+          height: image.height,
+          row: image.planes[0].bytesPerRow,
+          bytes: Uint8List.fromList(image.planes[0].bytes),
+          rotation: rotation,
+        );
+        jpeg = Isolate.run(() => bgraToJpeg(frame));
+      }
+      jpeg.then(_cam.add).whenComplete(() => _encoding = false);
     });
   }
 
@@ -202,5 +261,23 @@ class PhoneDevices implements CallDevices {
     try {
       await FlutterPcmSound.release();
     } catch (_) {}
+  }
+
+  Future<void> _afterFrame() {
+    final done = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!done.isCompleted) done.complete();
+    });
+    return done.future;
+  }
+}
+
+/// True when [c] can be handed to [CameraPreview] without throwing.
+bool cameraPreviewReady(CameraController? c) {
+  if (c == null) return false;
+  try {
+    return c.value.isInitialized && !c.value.hasError;
+  } catch (_) {
+    return false;
   }
 }

@@ -48,7 +48,6 @@ class _ForumScreenState extends ConsumerState<ForumScreen> {
         : Scope.forum(widget.spaceId, widget.boardId);
     return Scaffold(
       appBar: AppBar(
-        titleSpacing: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

@@ -200,6 +200,8 @@ ThemeData buildTheme(Palette p) {
       backgroundColor: p.raised,
       selectedColor: p.ink,
       labelStyle: Txt.small(p.ink),
+      secondaryLabelStyle: Txt.small(p.bg),
+      checkmarkColor: p.bg,
       side: BorderSide.none,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.pill)),
     ),

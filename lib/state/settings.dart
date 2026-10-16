@@ -29,7 +29,11 @@ class Settings {
     this.xferAutoAccept = false,
     this.xferAutoMaxMb = 50,
     this.xferParallel = 3,
-    this.keepAlive = false,
+    this.keepAlive = true,
+    this.accent = 'emerald',
+    this.devMode = false,
+    this.showFeedTab = true,
+    this.showWalletTab = true,
   });
 
   /// Orbot's HTTP CONNECT proxy.
@@ -93,9 +97,21 @@ class Settings {
   /// Incoming transfers that may run at once; the rest wait in a queue.
   final int xferParallel;
 
-  /// Android: keep the node running in the background with a persistent
-  /// notification, so messages arrive without opening the app.
+  /// Keep the node running in the background so messages arrive without
+  /// opening the app. Turn this off in Settings.
   final bool keepAlive;
+
+  /// emerald | blue | amber | ink. Recolors the live accent.
+  final String accent;
+
+  /// Localhost API, logs, and extra network detail.
+  final bool devMode;
+
+  /// Feed icon in the bottom bar. The feed route still exists.
+  final bool showFeedTab;
+
+  /// Wallet icon in the bottom bar. Settings can still open the wallet.
+  final bool showWalletTab;
 
   /// The options string handed to the native node before it binds.
   Map<String, Object?> get netOptions => {
@@ -130,6 +146,10 @@ class Settings {
     int? xferAutoMaxMb,
     int? xferParallel,
     bool? keepAlive,
+    String? accent,
+    bool? devMode,
+    bool? showFeedTab,
+    bool? showWalletTab,
   }) =>
       Settings(
         themeMode: themeMode ?? this.themeMode,
@@ -158,6 +178,10 @@ class Settings {
         xferAutoMaxMb: xferAutoMaxMb ?? this.xferAutoMaxMb,
         xferParallel: xferParallel ?? this.xferParallel,
         keepAlive: keepAlive ?? this.keepAlive,
+        accent: accent ?? this.accent,
+        devMode: devMode ?? this.devMode,
+        showFeedTab: showFeedTab ?? this.showFeedTab,
+        showWalletTab: showWalletTab ?? this.showWalletTab,
       );
 
   String encode() => jsonEncode({
@@ -187,6 +211,10 @@ class Settings {
         'xmax': xferAutoMaxMb,
         'xpar': xferParallel,
         'bg': keepAlive,
+        'accent': accent,
+        'dev': devMode,
+        'navFeed': showFeedTab,
+        'navWallet': showWalletTab,
       });
 
   static Settings decode(String? s) {
@@ -219,7 +247,11 @@ class Settings {
         xferAutoAccept: j['xa'] == true,
         xferAutoMaxMb: ((j['xmax'] as num?)?.toInt() ?? 50).clamp(1, 4096),
         xferParallel: ((j['xpar'] as num?)?.toInt() ?? 3).clamp(1, 8),
-        keepAlive: j['bg'] == true,
+        keepAlive: j['bg'] is bool ? j['bg'] as bool : true,
+        accent: const {'emerald', 'blue', 'amber', 'ink'}.contains(j['accent']) ? j['accent'] as String : 'emerald',
+        devMode: j['dev'] == true,
+        showFeedTab: j['navFeed'] != false,
+        showWalletTab: j['navWallet'] != false,
       );
     } catch (_) {
       return const Settings();

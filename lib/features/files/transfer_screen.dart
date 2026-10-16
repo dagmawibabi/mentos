@@ -110,6 +110,13 @@ void _settings(BuildContext context, WidgetRef ref) {
               child: Text('Transfer settings', style: Txt.title(p.ink)),
             ),
             SwitchTile(
+              icon: Icons.pause_circle_outline_rounded,
+              title: 'Hold new transfers',
+              subtitle: 'Incoming offers are declined until you turn this off',
+              value: ref.read(engineProvider).xferHeld,
+              onChanged: (v) => ref.read(engineProvider).setXferHeld(v),
+            ),
+            SwitchTile(
               icon: Icons.download_done_rounded,
               title: 'Auto-accept from people you follow',
               subtitle: 'Files up to ${s.xferAutoMaxMb} MB start without asking. Everyone else still asks.',
@@ -209,7 +216,7 @@ class _PeerTransferScreenState extends ConsumerState<PeerTransferScreen> {
 
   Future<void> _send() async {
     final e = ref.read(engineProvider);
-    final picked = await pickFiles(e.media);
+    final picked = await pickFiles(e.media, context: context);
     if (picked.isEmpty) return;
     setState(() => _busy = true);
     try {

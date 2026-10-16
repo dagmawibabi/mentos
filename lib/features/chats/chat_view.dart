@@ -341,8 +341,13 @@ class _ChatViewState extends ConsumerState<ChatView>
     });
 
     final rows = <Object>[];
+    final anchor = <int, GlobalKey>{};
+    final seen = <String>{};
     for (var i = msgs.length - 1; i >= 0; i--) {
       rows.add(i);
+      if (seen.add(msgs[i].id)) {
+        anchor[i] = _keys.putIfAbsent(msgs[i].id, GlobalKey.new);
+      }
       final day = dayLabel(msgs[i].ts);
       if (i == 0 || dayLabel(msgs[i - 1].ts) != day) rows.add(day);
     }
@@ -414,7 +419,7 @@ class _ChatViewState extends ConsumerState<ChatView>
                         a.author == b.author &&
                         (a.ts - b.ts).abs() < 180000 &&
                         dayLabel(a.ts) == dayLabel(b.ts);
-                    final key = _keys.putIfAbsent(m.id, () => GlobalKey());
+                    final key = anchor[i] ?? ValueKey('dup-$i-${m.id}');
                     return KeyedSubtree(
                       key: key,
                       child: Bubble(

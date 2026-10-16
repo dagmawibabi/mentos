@@ -41,12 +41,23 @@ dependencies:
   flutter_pcm_sound: ^3.3.3
   camera: ^0.12.1
   image: ^4.12.0
+  geolocator: ^14.0.1
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
   flutter_launcher_icons: ^0.14.4
+
+# Real flutter_local_notifications_windows compiles C++ that needs ATL
+# (atlbase.h). Visual Studio Build Tools does not include ATL unless that
+# component is installed, and Mentos does not show OS notifications on
+# Windows. See third_party/flutter_local_notifications_windows_stub.
+dependency_overrides:
+  flutter_local_notifications_windows:
+    path: third_party/flutter_local_notifications_windows_stub
 
 flutter_launcher_icons:
   android: true

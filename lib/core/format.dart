@@ -12,6 +12,12 @@ String timeAgo(int ms) {
 
 String clock(int ms) => DateFormat('HH:mm').format(DateTime.fromMillisecondsSinceEpoch(ms));
 
+/// Absolute local time, for records a person may want to keep.
+String written(int ms) {
+  if (ms <= 0) return 'with this identity';
+  return DateFormat('MMM d, y · HH:mm:ss').format(DateTime.fromMillisecondsSinceEpoch(ms));
+}
+
 String dayLabel(int ms) {
   final t = DateTime.fromMillisecondsSinceEpoch(ms);
   final now = DateTime.now();

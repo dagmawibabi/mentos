@@ -7,7 +7,9 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
 import '../../net/diagnostics.dart';
+import '../../net/engine.dart';
 import '../../net/engine_net.dart';
+import '../../net/pay/coin.dart';
 import '../../net/transport.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
@@ -123,12 +125,53 @@ class _NodeScreenState extends ConsumerState<NodeScreen> {
               child: TechRows([
                 ('sent', '${bytes(conn.txBytes)} in ${compact(conn.txDatagrams)} datagrams', copy: false),
                 ('received', '${bytes(conn.rxBytes)} in ${compact(conn.rxDatagrams)} datagrams', copy: false),
-                ('lost', '${conn.lostPackets} packets (${(conn.lossRate * 100).toStringAsFixed(2)}%)', copy: false),
+                ('lost', '${conn.lostPackets} packets · ${bytes(conn.lostBytes)} (${(conn.lossRate * 100).toStringAsFixed(2)}%)', copy: false),
                 ('opened by', conn.side == 'client' ? 'you dialed' : 'they dialed', copy: false),
-                ('protocol', conn.alpn, copy: false),
+                ('protocol', conn.alpn.isEmpty ? '—' : conn.alpn, copy: false),
+                ('paths', '${conn.paths.length}', copy: false),
+                ('known addrs', '${conn.knownAddrs.length}', copy: false),
                 for (final a in conn.knownAddrs)
                   (a.active ? 'addr (active)' : 'addr', '${a.kind} · ${a.address}', copy: true),
               ]),
+            ),
+          ],
+          SectionLabel('Ledger'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+            child: TechRows(_ledgerRows(e, id, isMe)),
+          ),
+          SectionLabel('Profile'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+            child: TechRows([
+              ('name', isMe ? e.myProfile.displayName : peer.name, copy: false),
+              if (peer.nickname != null && peer.nickname!.isNotEmpty) ('nickname', peer.nickname!, copy: false),
+              ('bio', (isMe ? e.myProfile.bio : peer.profile?.bio ?? '').isEmpty ? '—' : (isMe ? e.myProfile.bio : peer.profile!.bio), copy: false),
+              ('discoverable', (isMe ? e.myProfile.discoverable : peer.profile?.discoverable == true) ? 'yes' : 'no', copy: false),
+              ('keep posts', (isMe ? e.myProfile.keepPosts : peer.profile?.keepPosts == true) ? 'followers may keep' : 'off', copy: false),
+              ('profile signed', peer.profile == null && !isMe ? 'not on this phone' : timeAgo(isMe ? e.myProfile.ts : peer.profile!.ts), copy: false),
+              ('blocked', peer.blocked ? 'yes' : 'no', copy: false),
+            ]),
+          ),
+          SectionLabel('Where you meet'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+            child: TechRows([
+              ('gossip topics', shared.isEmpty ? 'none' : '${shared.length}', copy: false),
+              for (final t in e.neighbors.entries)
+                if (t.value.contains(id))
+                  (labels[t.key] ?? 'topic', t.key, copy: true),
+              for (final g in e.db.groups().where((g) => g.owner == id || g.members.contains(id)))
+                ('group', g.name, copy: false),
+              for (final s in e.spaces().where((s) => s.owner == id || s.roles.containsKey(id)))
+                ('space', '${s.name}${s.public ? ' · public' : ''}', copy: false),
+            ]),
+          ),
+          if (!isMe) ...[
+            SectionLabel('From them, in memory'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+              child: _Recent(items: e.liveItems().where((i) => i.author == id).take(6).toList()),
             ),
           ],
           SectionLabel('Data between you'),
@@ -148,7 +191,12 @@ class _NodeScreenState extends ConsumerState<NodeScreen> {
             padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
             child: TechRows([
               ('node id', id, copy: true),
-              ('key', 'Ed25519 public key', copy: false),
+              ('key', 'Ed25519 public key, 32 bytes', copy: false),
+              ('encoding', 'lowercase hex, 64 characters', copy: false),
+              if (isMe) ('home relay', e.preferredRelay ?? status?.relayUrl ?? 'none pinned', copy: true),
+              if (isMe) ('topics joined', '${e.topicCount}', copy: false),
+              if (isMe) ('engine', status?.engine ?? '—', copy: false),
+              if (isMe) ('running', status?.running == true ? 'yes' : 'no', copy: false),
               if (peer.addr != null) ('last ticket', peer.addr!, copy: true),
               if (peer.profile != null) ('profile', 'signed ${timeAgo(peer.profile!.ts)} ago', copy: false),
             ]),
@@ -188,6 +236,72 @@ String _scopeName(String scope) => switch (Scope.type(scope)) {
       'gdm' => 'group chat',
       final t => t,
     };
+
+List<(String, String, {bool copy})> _ledgerRows(Engine e, String id, bool isMe) {
+  final coin = e.coin;
+  if (coin == null) return [('ledger', 'not open on this phone', copy: false)];
+  final chain = coin.view().chains[id] ?? const [];
+  final withMe = coin.history(id).where((t) => !t.isMint && (t.from == e.me.id || t.to == e.me.id)).toList();
+  var sent = 0;
+  var got = 0;
+  for (final t in withMe) {
+    if (t.from == e.me.id && t.to == id) sent += t.amount;
+    if (t.to == e.me.id && t.from == id) got += t.amount;
+  }
+  return [
+    ('balance', '${Coin.format(coin.balance(id))} Mentos', copy: false),
+    ('chain', chain.isEmpty ? 'no payments seen' : '${chain.length} signed ${chain.length == 1 ? 'entry' : 'entries'}', copy: false),
+    ('tip', chain.isEmpty ? '—' : chain.last.hash, copy: chain.isNotEmpty),
+    if (!isMe) ('you sent them', Coin.format(sent), copy: false),
+    if (!isMe) ('they sent you', Coin.format(got), copy: false),
+    if (!isMe) ('payments between you', '${withMe.length}', copy: false),
+    ('topic', Coin.topicLabel, copy: false),
+  ];
+}
+
+class _Recent extends StatelessWidget {
+  const _Recent({required this.items});
+  final List<Item> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    if (items.isEmpty) {
+      return Text('Nothing of theirs is sitting in memory. Kept items are counted above.', style: Txt.small(p.muted));
+    }
+    return Column(
+      children: [
+        for (final item in items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(width: 72, child: Text(item.e.kind, style: Txt.mono(p.faint, size: 11))),
+                Expanded(
+                  child: Text(
+                    _snippet(item),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Txt.mono(p.ink, size: 11.5),
+                  ),
+                ),
+                Text(timeAgo(item.ts), style: Txt.mono(p.muted, size: 11)),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _snippet(Item item) {
+  final text = item.body['text'];
+  if (text is String && text.trim().isNotEmpty) return text.trim();
+  final name = item.body['name'];
+  if (name is String && name.isNotEmpty) return name;
+  return item.id;
+}
 
 class _Chip extends StatelessWidget {
   const _Chip(this.text, {this.on = false, this.danger = false});

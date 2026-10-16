@@ -15,6 +15,54 @@ import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
 import 'devices.dart';
 
+final _routeLock = <String>{};
+
+/// Pushes [path] unless that screen is already open or a push is in flight.
+Future<void> openOnce(BuildContext context, String path) {
+  if (!context.mounted || !_routeLock.add(path)) return Future.value();
+  final router = GoRouter.of(context);
+  if (router.state.uri.path == path) {
+    _routeLock.remove(path);
+    return Future.value();
+  }
+  return router.push(path).whenComplete(() => _routeLock.remove(path));
+}
+
+/// Voice or video, from the call button.
+Future<void> showCallMenu(BuildContext context, WidgetRef ref, List<String> peers) async {
+  final box = context.findRenderObject() as RenderBox?;
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+  if (box == null || overlay == null || !box.hasSize) return;
+  final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+  final video = await showMenu<bool>(
+    context: context,
+    position: RelativeRect.fromRect(
+      topLeft & box.size,
+      Offset.zero & overlay.size,
+    ),
+    items: const [
+      PopupMenuItem(
+        value: false,
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.call_outlined),
+          title: Text('Voice call'),
+        ),
+      ),
+      PopupMenuItem(
+        value: true,
+        child: ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.videocam_outlined),
+          title: Text('Video call'),
+        ),
+      ),
+    ],
+  );
+  if (video == null || !context.mounted) return;
+  await startCall(context, ref, peers, video: video);
+}
+
 /// Starts a call and opens the call screen, explaining failures.
 Future<void> startCall(BuildContext context, WidgetRef ref, List<String> peers, {required bool video}) async {
   final m = ref.read(callManagerProvider);
@@ -24,7 +72,7 @@ Future<void> startCall(BuildContext context, WidgetRef ref, List<String> peers, 
   }
   try {
     await m.start(peers, video: video);
-    if (context.mounted) unawaited(context.push('/call'));
+    if (context.mounted) unawaited(openOnce(context, '/call'));
   } catch (e) {
     if (context.mounted) toast(context, e is StateError ? e.message : '$e');
   }
@@ -90,7 +138,6 @@ class _CallScreenState extends ConsumerState<CallScreen> {
     }
     final others = c.members.where((x) => x != e.me.id).toList();
     final title = others.length == 1 ? e.nameOf(others.first) : others.map(e.nameOf).take(3).join(', ');
-    final preview = m.devices is PhoneDevices ? (m.devices as PhoneDevices).preview : null;
     final route = others.map((p) => c.rtt[p]).whereType<double>().toList();
 
     return Scaffold(
@@ -119,16 +166,23 @@ class _CallScreenState extends ConsumerState<CallScreen> {
             Text(_status(c), style: Txt.mono(Colors.white70, size: 13)),
             const SizedBox(height: Space.lg),
             Expanded(child: _Grid(c: c, others: others, nameOf: e.nameOf)),
-            if (preview != null && c.camera && preview.value.isInitialized)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Padding(
-                  padding: const EdgeInsets.only(right: Space.gutter, bottom: Space.md),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(Radii.md),
-                    child: SizedBox(width: 96, height: 128, child: CameraPreview(preview)),
-                  ),
-                ),
+            if (c.camera && m.devices is PhoneDevices)
+              ListenableBuilder(
+                listenable: m.devices as PhoneDevices,
+                builder: (_, _) {
+                  final preview = (m.devices as PhoneDevices).preview;
+                  if (!cameraPreviewReady(preview)) return const SizedBox.shrink();
+                  return Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: Space.gutter, bottom: Space.md),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(Radii.md),
+                        child: SizedBox(width: 96, height: 128, child: CameraPreview(preview!)),
+                      ),
+                    ),
+                  );
+                },
               ),
             _Controls(c: c, m: m),
             const SizedBox(height: Space.lg),
@@ -210,13 +264,22 @@ class _Tile extends StatelessWidget {
   }
 }
 
-class _Controls extends StatelessWidget {
+class _Controls extends StatefulWidget {
   const _Controls({required this.c, required this.m});
   final CallState c;
   final CallManager m;
 
   @override
+  State<_Controls> createState() => _ControlsState();
+}
+
+class _ControlsState extends State<_Controls> {
+  bool _walkie = false;
+
+  @override
   Widget build(BuildContext context) {
+    final c = widget.c;
+    final m = widget.m;
     final p = context.pal;
     if (c.phase == CallPhase.incoming) {
       return Row(
@@ -244,6 +307,22 @@ class _Controls extends StatelessWidget {
           on: c.camera,
         ),
         if (c.camera) _Round(icon: Icons.cameraswitch_rounded, label: 'Flip', onTap: live ? m.switchCamera : null),
+        _Round(
+          icon: Icons.campaign_rounded,
+          label: _walkie ? 'Talk' : 'Walkie',
+          on: _walkie,
+          onTap: live
+              ? () {
+                  setState(() => _walkie = !_walkie);
+                  if (_walkie) m.setMic(false);
+                }
+              : null,
+          onHold: _walkie
+              ? (down) {
+                  m.setMic(down);
+                }
+              : null,
+        ),
         _Round(icon: Icons.call_end_rounded, label: 'End', color: p.danger, onTap: live ? m.hangUp : null),
       ],
     );
@@ -251,12 +330,13 @@ class _Controls extends StatelessWidget {
 }
 
 class _Round extends StatelessWidget {
-  const _Round({required this.icon, required this.label, this.onTap, this.color, this.on = false});
+  const _Round({required this.icon, required this.label, this.onTap, this.color, this.on = false, this.onHold});
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
   final Color? color;
   final bool on;
+  final void Function(bool down)? onHold;
 
   @override
   Widget build(BuildContext context) {
@@ -273,7 +353,10 @@ class _Round extends StatelessWidget {
             shape: const CircleBorder(),
             child: InkWell(
               customBorder: const CircleBorder(),
-              onTap: onTap,
+              onTap: onHold == null ? onTap : null,
+              onTapDown: onHold == null ? null : (_) => onHold!(true),
+              onTapUp: onHold == null ? null : (_) => onHold!(false),
+              onTapCancel: onHold == null ? null : () => onHold!(false),
               child: SizedBox(width: 64, height: 64, child: Icon(icon, color: fg, size: 28)),
             ),
           ),

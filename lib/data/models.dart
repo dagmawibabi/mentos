@@ -512,6 +512,7 @@ class SpaceInfo {
     this.preserve = false,
     this.shareMine = true,
     this.muted = false,
+    this.public = false,
     this.joined = 0,
     this.metaTs = 0,
   });
@@ -536,6 +537,9 @@ class SpaceInfo {
   /// Members may keep my messages in this space.
   final bool shareMine;
   final bool muted;
+
+  /// Listed to contacts as a space they can ask to join. The key stays private.
+  final bool public;
   final int joined;
   final int metaTs;
 
@@ -552,6 +556,7 @@ class SpaceInfo {
     bool? preserve,
     bool? shareMine,
     bool? muted,
+    bool? public,
     int? metaTs,
   }) =>
       SpaceInfo(
@@ -567,6 +572,7 @@ class SpaceInfo {
         preserve: preserve ?? this.preserve,
         shareMine: shareMine ?? this.shareMine,
         muted: muted ?? this.muted,
+        public: public ?? this.public,
         joined: joined,
         metaTs: metaTs ?? this.metaTs,
       );
@@ -578,6 +584,7 @@ class SpaceInfo {
         'forums': forums.map((c) => c.toJson()).toList(),
         'roles': roles.map((k, v) => MapEntry(k, v.name)),
         'archive': archive,
+        if (public) 'public': true,
       };
 
   Map<String, dynamic> toJson() => {
@@ -618,6 +625,7 @@ class SpaceInfo {
         preserve: j['preserve'] == true,
         shareMine: j['shareMine'] != false,
         muted: j['muted'] == true,
+        public: j['public'] == true,
         joined: j['joined'] is num ? (j['joined'] as num).toInt() : 0,
         metaTs: j['metaTs'] is num ? (j['metaTs'] as num).toInt() : 0,
       );
@@ -640,10 +648,11 @@ class SpaceInfo {
       channels: _channelsOf(b['channels']),
       forums: _channelsOf(b['forums']).isEmpty ? forums : _channelsOf(b['forums']),
       roles: _rolesOf(b['roles']),
-      archive: b['archive'] != false,
+        archive: b['archive'] != false,
       preserve: preserve,
       shareMine: shareMine,
       muted: muted,
+      public: b['public'] == true,
       joined: joined,
       metaTs: e.ts,
     );
@@ -1055,17 +1064,35 @@ class StorySticker {
 
 /// Description, folder and tags a host attached to a hosted file.
 class HostMeta {
-  const HostMeta({this.note = '', this.folder = '', this.tags = const []});
+  const HostMeta({
+    this.note = '',
+    this.folder = '',
+    this.tags = const [],
+    this.lock = '',
+    this.audience = const [],
+    this.password = '',
+  });
   static const maxTags = 8;
 
   final String note;
   final String folder;
   final List<String> tags;
 
+  /// SHA-256 hex of the password. Empty means the file is not locked.
+  final String lock;
+
+  /// Node ids allowed to fetch this file. Empty means anyone who can see it.
+  final List<String> audience;
+
+  /// Typed password, used only while hosting. Not stored.
+  final String password;
+
   static HostMeta of(Item i) => HostMeta(
         note: i.body['note'] is String ? i.body['note'] as String : '',
         folder: i.body['folder'] is String ? i.body['folder'] as String : '',
         tags: [for (final t in (i.body['tags'] is List ? i.body['tags'] as List : const [])) if (t is String) t],
+        lock: i.body['lock'] is String ? i.body['lock'] as String : '',
+        audience: [for (final t in (i.body['for'] is List ? i.body['for'] as List : const [])) if (t is String && t.isNotEmpty) t],
       );
 
   /// Lowercase, no '#', no spaces, unique, at most [maxTags].

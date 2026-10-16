@@ -42,11 +42,30 @@ class SettingsNotifier extends Notifier<Settings> {
   }
 }
 
-final settingsProvider = NotifierProvider<SettingsNotifier, Settings>(SettingsNotifier.new);
+final settingsProvider = NotifierProvider<SettingsNotifier, Settings>(
+  SettingsNotifier.new,
+);
 
-final themeModeProvider = Provider<ThemeMode>((ref) => ref.watch(settingsProvider).themeMode);
+/// Which list the Chats tab is showing.
+enum InboxPane { chats, groups, channels }
 
-bool _any(Set<String> keys, Iterable<String> wanted) => wanted.any(keys.contains);
+class InboxPaneNotifier extends Notifier<InboxPane> {
+  @override
+  InboxPane build() => InboxPane.chats;
+
+  void show(InboxPane pane) => state = pane;
+}
+
+final inboxPaneProvider = NotifierProvider<InboxPaneNotifier, InboxPane>(
+  InboxPaneNotifier.new,
+);
+
+final themeModeProvider = Provider<ThemeMode>(
+  (ref) => ref.watch(settingsProvider).themeMode,
+);
+
+bool _any(Set<String> keys, Iterable<String> wanted) =>
+    wanted.any(keys.contains);
 
 Stream<T> _ready<T>(Ref ref, T empty, Stream<T> Function(Engine e) run) {
   final e = _eng(ref);
@@ -59,125 +78,297 @@ Stream<T> _ready<T>(Ref ref, T empty, Stream<T> Function(Engine e) run) {
 }
 
 final feedProvider = StreamProvider.autoDispose<List<PostView>>((ref) {
-  return _ready(ref, const <PostView>[], (e) =>
-      e.watch((k) => _any(k, [Ch.feed, Ch.peers, Ch.bookmarks]) || k.any((x) => x.startsWith('item:')), e.feed));
+  return _ready(
+    ref,
+    const <PostView>[],
+    (e) => e.watch(
+      (k) =>
+          _any(k, [Ch.feed, Ch.peers, Ch.bookmarks]) ||
+          k.any((x) => x.startsWith('item:')),
+      e.feed,
+    ),
+  );
 });
 
-final authorFeedProvider = StreamProvider.autoDispose.family<List<PostView>, String>((ref, author) {
-  return _ready(ref, const <PostView>[], (e) =>
-      e.watch((k) => _any(k, [Ch.feed, Scope.feed(author), Ch.bookmarks, Ch.peers]), () => e.feed(author: author)));
-});
+final heldPostsProvider =
+    StreamProvider.autoDispose<
+      ({List<HeldPost> scheduled, List<HeldPost> drafts})
+    >((ref) {
+      return _ready(
+        ref,
+        (scheduled: const <HeldPost>[], drafts: const <HeldPost>[]),
+        (e) => e.watch(
+          (k) => k.contains(Ch.queue),
+          () => (scheduled: e.scheduledPosts(), drafts: e.postDrafts()),
+        ),
+      );
+    });
 
-final spaceFeedProvider = StreamProvider.autoDispose.family<List<PostView>, String>((ref, spaceId) {
-  return _ready(ref, const <PostView>[], (e) =>
-      e.watch((k) => _any(k, [Ch.feed, Scope.spaceFeed(spaceId), Ch.bookmarks]), () => e.feed(spaceId: spaceId)));
-});
+final authorFeedProvider = StreamProvider.autoDispose
+    .family<List<PostView>, String>((ref, author) {
+      return _ready(
+        ref,
+        const <PostView>[],
+        (e) => e.watch(
+          (k) => _any(k, [Ch.feed, Scope.feed(author), Ch.bookmarks, Ch.peers]),
+          () => e.feed(author: author),
+        ),
+      );
+    });
 
-final forumFeedProvider = StreamProvider.autoDispose.family<List<PostView>, (String, String)>((ref, ids) {
-  return _ready(ref, const <PostView>[], (e) => e.watch(
-      (k) => _any(k, [Ch.feed, Scope.forum(ids.$1, ids.$2), Ch.bookmarks]) || k.any((x) => x.startsWith('forum:')),
-      () => e.feed(spaceId: ids.$1, boardId: ids.$2)));
-});
+final spaceFeedProvider = StreamProvider.autoDispose
+    .family<List<PostView>, String>((ref, spaceId) {
+      return _ready(
+        ref,
+        const <PostView>[],
+        (e) => e.watch(
+          (k) => _any(k, [Ch.feed, Scope.spaceFeed(spaceId), Ch.bookmarks]),
+          () => e.feed(spaceId: spaceId),
+        ),
+      );
+    });
 
-final hostedProvider = StreamProvider.autoDispose.family<List<Item>, String>((ref, author) {
-  return _ready(ref, const <Item>[], (e) =>
-      e.watch((k) => _any(k, [Ch.files, Scope.files(author), Ch.peers]), () => e.hosted(author)));
+final forumFeedProvider = StreamProvider.autoDispose
+    .family<List<PostView>, (String, String)>((ref, ids) {
+      return _ready(
+        ref,
+        const <PostView>[],
+        (e) => e.watch(
+          (k) =>
+              _any(k, [Ch.feed, Scope.forum(ids.$1, ids.$2), Ch.bookmarks]) ||
+              k.any((x) => x.startsWith('forum:')),
+          () => e.feed(spaceId: ids.$1, boardId: ids.$2),
+        ),
+      );
+    });
+
+final hostedProvider = StreamProvider.autoDispose.family<List<Item>, String>((
+  ref,
+  author,
+) {
+  return _ready(
+    ref,
+    const <Item>[],
+    (e) => e.watch(
+      (k) => _any(k, [Ch.files, Scope.files(author), Ch.peers]),
+      () => e.hosted(author),
+    ),
+  );
 });
 
 final transfersProvider = StreamProvider.autoDispose<List<FileTransfer>>((ref) {
-  return _ready(ref, const <FileTransfer>[], (e) => e.watch((k) => k.contains(Ch.xfers), e.transfers));
+  return _ready(
+    ref,
+    const <FileTransfer>[],
+    (e) => e.watch((k) => k.contains(Ch.xfers), e.transfers),
+  );
 });
 
 final bookmarksProvider = StreamProvider.autoDispose<List<PostView>>((ref) {
-  return _ready(ref, const <PostView>[], (e) => e.watch((k) => _any(k, [Ch.feed, Ch.bookmarks]), e.bookmarked));
+  return _ready(
+    ref,
+    const <PostView>[],
+    (e) => e.watch((k) => _any(k, [Ch.feed, Ch.bookmarks]), e.bookmarked),
+  );
 });
 
-final postProvider = StreamProvider.autoDispose.family<PostView?, String>((ref, id) {
-  return _ready(ref, null, (e) =>
-      e.watch((k) => _any(k, [Ch.feed, 'item:$id', Ch.bookmarks]) || k.any((x) => x.startsWith('post:')), () => e.post(id)));
+final postProvider = StreamProvider.autoDispose.family<PostView?, String>((
+  ref,
+  id,
+) {
+  return _ready(
+    ref,
+    null,
+    (e) => e.watch(
+      (k) =>
+          _any(k, [Ch.feed, 'item:$id', Ch.bookmarks]) ||
+          k.any((x) => x.startsWith('post:')),
+      () => e.post(id),
+    ),
+  );
 });
 
-final commentsProvider = StreamProvider.autoDispose.family<List<CommentView>, String>((ref, postId) {
-  return _ready(ref, const <CommentView>[], (e) =>
-      e.watch((k) => k.any((x) => x.startsWith('post:') || x.startsWith('item:')) || k.contains(Ch.peers), () {
-        final p = e.post(postId);
-        return p == null ? const <CommentView>[] : e.comments(p);
-      }));
-});
+final commentsProvider = StreamProvider.autoDispose
+    .family<List<CommentView>, String>((ref, postId) {
+      return _ready(
+        ref,
+        const <CommentView>[],
+        (e) => e.watch(
+          (k) =>
+              k.any((x) => x.startsWith('post:') || x.startsWith('item:')) ||
+              k.contains(Ch.peers),
+          () {
+            final p = e.post(postId);
+            return p == null ? const <CommentView>[] : e.comments(p);
+          },
+        ),
+      );
+    });
 
 final storiesProvider = StreamProvider.autoDispose<List<StoryGroup>>((ref) {
-  return _ready(ref, const <StoryGroup>[], (e) =>
-      e.watch((k) => _any(k, [Ch.stories, Ch.peers, Ch.presence, Ch.net]), e.stories));
+  return _ready(
+    ref,
+    const <StoryGroup>[],
+    (e) => e.watch(
+      (k) => _any(k, [Ch.stories, Ch.peers, Ch.presence, Ch.net]),
+      e.stories,
+    ),
+  );
 });
 
 final chatsProvider = StreamProvider.autoDispose<List<ChatSummary>>((ref) {
-  return _ready(ref, const <ChatSummary>[], (e) => e.watch(
-      (k) => _any(k, [Ch.chats, Ch.presence, Ch.peers, Ch.grants, Ch.groups]) ||
+  return _ready(
+    ref,
+    const <ChatSummary>[],
+    (e) => e.watch(
+      (k) =>
+          _any(k, [Ch.chats, Ch.presence, Ch.peers, Ch.grants, Ch.groups]) ||
           k.any((x) => x.startsWith('dm:') || x.startsWith('gdm:')),
-      e.chats));
+      e.chats,
+    ),
+  );
 });
 
 final unreadChatsProvider = StreamProvider.autoDispose<int>((ref) {
-  return _ready(ref, 0, (e) => e.watch((k) => k.contains(Ch.chats) || k.any((x) => x.startsWith('dm:')), e.unreadChats));
-});
-
-final messagesProvider = StreamProvider.autoDispose.family<List<MessageView>, String>((ref, scope) {
-  return _ready(ref, const <MessageView>[], (e) =>
-      e.watch((k) => _any(k, [scope, Ch.receipts(scope), Ch.presence]), () => e.messages(scope)));
-});
-
-final typingProvider = StreamProvider.autoDispose.family<Set<String>, String>((ref, scope) {
-  return _ready(ref, const <String>{}, (e) => e.watch((k) => k.contains(Ch.typing(scope)), () => e.typingIn(scope)));
-});
-
-final syncStateProvider = StreamProvider.autoDispose.family<SyncState, String>((ref, scope) {
   return _ready(
-      ref,
-      const SyncState(mine: null, theirs: null, theirsOffered: false),
-      (e) => e.watch((k) => _any(k, [Ch.grants, scope]), () => e.syncState(scope)));
+    ref,
+    0,
+    (e) => e.watch(
+      (k) => k.contains(Ch.chats) || k.any((x) => x.startsWith('dm:')),
+      e.unreadChats,
+    ),
+  );
+});
+
+final messagesProvider = StreamProvider.autoDispose
+    .family<List<MessageView>, String>((ref, scope) {
+      return _ready(
+        ref,
+        const <MessageView>[],
+        (e) => e.watch(
+          (k) => _any(k, [scope, Ch.receipts(scope), Ch.presence]),
+          () => e.messages(scope),
+        ),
+      );
+    });
+
+final typingProvider = StreamProvider.autoDispose.family<Set<String>, String>((
+  ref,
+  scope,
+) {
+  return _ready(
+    ref,
+    const <String>{},
+    (e) =>
+        e.watch((k) => k.contains(Ch.typing(scope)), () => e.typingIn(scope)),
+  );
+});
+
+final syncStateProvider = StreamProvider.autoDispose.family<SyncState, String>((
+  ref,
+  scope,
+) {
+  return _ready(
+    ref,
+    const SyncState(mine: null, theirs: null, theirsOffered: false),
+    (e) =>
+        e.watch((k) => _any(k, [Ch.grants, scope]), () => e.syncState(scope)),
+  );
 });
 
 final peerProvider = StreamProvider.autoDispose.family<Peer, String>((ref, id) {
-  return _ready(ref, Peer(id: id), (e) => e.watch((k) => _any(k, [Ch.peers, Ch.presence]), () => e.peerOf(id)));
+  return _ready(
+    ref,
+    Peer(id: id),
+    (e) => e.watch((k) => _any(k, [Ch.peers, Ch.presence]), () => e.peerOf(id)),
+  );
 });
 
-final onlineProvider = StreamProvider.autoDispose.family<bool, String>((ref, id) {
-  return _ready(ref, false, (e) => e.watch((k) => k.contains(Ch.presence), () => e.isOnline(id)));
+final onlineProvider = StreamProvider.autoDispose.family<bool, String>((
+  ref,
+  id,
+) {
+  return _ready(
+    ref,
+    false,
+    (e) => e.watch((k) => k.contains(Ch.presence), () => e.isOnline(id)),
+  );
 });
 
 final peopleProvider = StreamProvider.autoDispose<List<Peer>>((ref) {
-  return _ready(ref, const <Peer>[], (e) => e.watch((k) => _any(k, [Ch.peers, Ch.presence]), e.people));
+  return _ready(
+    ref,
+    const <Peer>[],
+    (e) => e.watch((k) => _any(k, [Ch.peers, Ch.presence]), e.people),
+  );
 });
 
 final myProfileProvider = StreamProvider.autoDispose<Profile>((ref) {
-  return _ready(ref, const Profile(id: ''), (e) => e.watch((k) => k.contains(Ch.peers), () => e.myProfile));
+  return _ready(
+    ref,
+    const Profile(id: ''),
+    (e) => e.watch((k) => k.contains(Ch.peers), () => e.myProfile),
+  );
 });
 
 final spacesProvider = StreamProvider.autoDispose<List<SpaceInfo>>((ref) {
-  return _ready(ref, const <SpaceInfo>[], (e) => e.watch((k) => k.contains(Ch.spaces), e.spaces));
+  return _ready(
+    ref,
+    const <SpaceInfo>[],
+    (e) => e.watch((k) => k.contains(Ch.spaces), e.spaces),
+  );
 });
 
-final spaceProvider = StreamProvider.autoDispose.family<SpaceInfo?, String>((ref, id) {
-  return _ready(ref, null, (e) => e.watch((k) => k.contains(Ch.spaces), () => e.space(id)));
+final spaceProvider = StreamProvider.autoDispose.family<SpaceInfo?, String>((
+  ref,
+  id,
+) {
+  return _ready(
+    ref,
+    null,
+    (e) => e.watch((k) => k.contains(Ch.spaces), () => e.space(id)),
+  );
 });
 
-final membersProvider = StreamProvider.autoDispose.family<List<({String id, Role role, bool online})>, String>(
-    (ref, id) {
-  return _ready(ref, const <({String id, Role role, bool online})>[], (e) =>
-      e.watch((k) => _any(k, [Ch.spaces, Ch.presence, Ch.peers, Scope.spaceMeta(id)]), () => e.members(id)));
-});
+final membersProvider = StreamProvider.autoDispose
+    .family<List<({String id, Role role, bool online})>, String>((ref, id) {
+      return _ready(
+        ref,
+        const <({String id, Role role, bool online})>[],
+        (e) => e.watch(
+          (k) =>
+              _any(k, [Ch.spaces, Ch.presence, Ch.peers, Scope.spaceMeta(id)]),
+          () => e.members(id),
+        ),
+      );
+    });
 
 final activityProvider = StreamProvider.autoDispose<List<Activity>>((ref) {
-  return _ready(ref, const <Activity>[], (e) => e.watch((k) => k.contains(Ch.activity), () => e.db.activity()));
+  return _ready(
+    ref,
+    const <Activity>[],
+    (e) => e.watch((k) => k.contains(Ch.activity), () => e.db.activity()),
+  );
 });
 
 final unseenActivityProvider = StreamProvider.autoDispose<int>((ref) {
-  return _ready(ref, 0, (e) => e.watch((k) => k.contains(Ch.activity), e.db.unseenActivity));
+  return _ready(
+    ref,
+    0,
+    (e) => e.watch((k) => k.contains(Ch.activity), e.db.unseenActivity),
+  );
 });
 
 final filesProvider = StreamProvider.autoDispose<List<StoredFile>>((ref) {
-  return _ready(ref, const <StoredFile>[], (e) =>
-      e.watch((k) => k.contains(Ch.files) || k.contains(Ch.feed) || k.contains(Ch.chats), e.db.files));
+  return _ready(
+    ref,
+    const <StoredFile>[],
+    (e) => e.watch(
+      (k) =>
+          k.contains(Ch.files) || k.contains(Ch.feed) || k.contains(Ch.chats),
+      e.db.files,
+    ),
+  );
 });
 
 /// Network status, refreshed on network events and every few seconds.
@@ -193,7 +384,9 @@ final netStatusProvider = StreamProvider.autoDispose<NetStatus>((ref) async* {
     yield NetStatus(nodeId: e.me.id, running: false);
   }
   final ticker = Stream.periodic(const Duration(seconds: 4));
-  final events = e.changes.where((k) => k.contains(Ch.net) || k.contains(Ch.presence));
+  final events = e.changes.where(
+    (k) => k.contains(Ch.net) || k.contains(Ch.presence),
+  );
   await for (final _ in StreamGroup.merge([ticker, events])) {
     try {
       yield await e.netStatus();
@@ -202,7 +395,9 @@ final netStatusProvider = StreamProvider.autoDispose<NetStatus>((ref) async* {
 });
 
 /// Native diagnostics, re-measured every few seconds while watched.
-final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((ref) async* {
+final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((
+  ref,
+) async* {
   final e = _eng(ref);
   if (e == null || !e.hasDiagnostics) {
     yield null;
@@ -215,21 +410,45 @@ final diagnosticsProvider = StreamProvider.autoDispose<NetDiagnostics?>((ref) as
 });
 
 final alertsProvider = StreamProvider.autoDispose<List<Alert>>((ref) {
-  return _ready(ref, const <Alert>[], (e) => e.watch((k) => k.contains(Ch.alerts) || k.contains(Ch.xfers), e.alerts));
+  return _ready(
+    ref,
+    const <Alert>[],
+    (e) =>
+        e.watch((k) => k.contains(Ch.alerts) || k.contains(Ch.xfers), e.alerts),
+  );
 });
 
 final broadcastsProvider = StreamProvider.autoDispose<List<Bcast>>((ref) {
-  return _ready(ref, const <Bcast>[], (e) => e.watch((k) => _any(k, [Ch.channels, Ch.feed, Ch.peers]), e.broadcasts));
+  return _ready(
+    ref,
+    const <Bcast>[],
+    (e) =>
+        e.watch((k) => _any(k, [Ch.channels, Ch.feed, Ch.peers]), e.broadcasts),
+  );
 });
 
-final channelFeedProvider = StreamProvider.autoDispose.family<List<PostView>, (String, String)>((ref, ids) {
-  return _ready(ref, const <PostView>[], (e) => e.watch(
-      (k) => _any(k, [Ch.feed, Scope.bcast(ids.$1, ids.$2), Scope.channel(ids.$1, ids.$2)]),
-      () => e.channelFeed(owner: ids.$1, channelId: ids.$2)));
-});
+final channelFeedProvider = StreamProvider.autoDispose
+    .family<List<PostView>, (String, String)>((ref, ids) {
+      return _ready(
+        ref,
+        const <PostView>[],
+        (e) => e.watch(
+          (k) => _any(k, [
+            Ch.feed,
+            Scope.bcast(ids.$1, ids.$2),
+            Scope.channel(ids.$1, ids.$2),
+          ]),
+          () => e.channelFeed(owner: ids.$1, channelId: ids.$2),
+        ),
+      );
+    });
 
 final grantsProvider = StreamProvider.autoDispose<List<Grant>>((ref) {
-  return _ready(ref, const <Grant>[], (e) => e.watch((k) => _any(k, [Ch.grants, Ch.peers]), e.db.grants));
+  return _ready(
+    ref,
+    const <Grant>[],
+    (e) => e.watch((k) => _any(k, [Ch.grants, Ch.peers]), e.db.grants),
+  );
 });
 
 /// Minimal stream merge to avoid an extra dependency.

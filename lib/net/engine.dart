@@ -10,8 +10,13 @@ import '../data/db.dart';
 import '../data/media_store.dart';
 import '../data/models.dart';
 import '../state/settings.dart';
+import 'link_preview.dart';
+import 'live_loc.dart';
+import 'pay/coin.dart';
 import 'transport.dart';
 import 'views.dart';
+
+part 'market.dart';
 
 /// Change keys emitted on [Engine.changes] besides plain scopes.
 abstract final class Ch {
@@ -31,6 +36,7 @@ abstract final class Ch {
   static const alerts = '#alerts';
   static const jobs = '#jobs';
   static const channels = '#channels';
+  static const queue = '#queue';
   static String typing(String scope) => '#typing:$scope';
   static String receipts(String scope) => '#rcpt:$scope';
 }
@@ -65,6 +71,10 @@ class Engine {
   final Transport net;
   final MediaStore media;
   Settings _settings;
+  CoinLedger? _coin;
+
+  /// The shared Mentos ledger. Null until [start] has begun.
+  CoinLedger? get coin => _coin;
 
   final _mem = <String, _Mem>{};
   final _tombstones = <String>{};
@@ -82,6 +92,7 @@ class Engine {
   final _alerts = <String, Alert>{};
   final _jobs = <String, Job>{};
   final _invites = <String, Map<String, dynamic>>{};
+
   /// Group id -> invited node -> when. Kept on disk so an acceptance that
   /// arrives after a restart still admits the person.
   final _outgoingInvites = <String, Map<String, int>>{};
@@ -95,39 +106,68 @@ class Engine {
   /// listener decides, using the person's notification settings.
   Stream<OsNote> get notes => _notes.stream;
 
-  final _callSignals = StreamController<({String from, Map<String, dynamic> m})>.broadcast();
-  final _appMessages = StreamController<({String from, String app, Map<String, dynamic> m})>.broadcast();
+  final _callSignals =
+      StreamController<({String from, Map<String, dynamic> m})>.broadcast();
+  final _appMessages =
+      StreamController<
+        ({String from, String app, Map<String, dynamic> m})
+      >.broadcast();
 
   /// Messages for features built on the engine (payments), from the
   /// authenticated direct channel.
-  Stream<({String from, String app, Map<String, dynamic> m})> get appMessages => _appMessages.stream;
+  Stream<({String from, String app, Map<String, dynamic> m})> get appMessages =>
+      _appMessages.stream;
 
   /// Sends [body] to [peer] for [app]. With [queueId] it is stored and
   /// retried until delivered, like any other control message.
-  Future<bool> sendApp(String peer, String app, Map<String, dynamic> body, {String? queueId}) {
+  Future<bool> sendApp(
+    String peer,
+    String app,
+    Map<String, dynamic> body, {
+    String? queueId,
+  }) {
     final msg = {'t': 'app', 'app': app, 'b': body};
-    return queueId == null ? _send(peer, msg) : _sendOrQueue(queueId, peer, msg);
+    return queueId == null
+        ? _send(peer, msg)
+        : _sendOrQueue(queueId, peer, msg);
   }
+
   final _media = StreamController<MediaEvent>.broadcast();
 
   /// Call signalling received over the authenticated direct channel.
-  Stream<({String from, Map<String, dynamic> m})> get callSignals => _callSignals.stream;
+  Stream<({String from, Map<String, dynamic> m})> get callSignals =>
+      _callSignals.stream;
 
   /// Media connections opening and closing.
   Stream<MediaEvent> get mediaEvents => _media.stream;
 
   /// Sends a call control message now; calls are real time, so nothing is
   /// queued for later.
-  Future<bool> sendCallSignal(String peer, Map<String, dynamic> body) => _send(peer, {...body, 't': 'call'});
+  Future<bool> sendCallSignal(String peer, Map<String, dynamic> body) =>
+      _send(peer, {...body, 't': 'call'});
 
   /// Records something for the person's activity feed and notifications.
-  void noteActivity(Activity a, {String? title, String? body, String? route, String category = 'other'}) {
+  void noteActivity(
+    Activity a, {
+    String? title,
+    String? body,
+    String? route,
+    String category = 'other',
+  }) {
     db.addActivity(a);
     _emit({Ch.activity});
     if (title != null) {
-      _notify(id: a.id, title: title, body: body ?? '', route: route, category: category, at: a.ts);
+      _notify(
+        id: a.id,
+        title: title,
+        body: body ?? '',
+        route: route,
+        category: category,
+        at: a.ts,
+      );
     }
   }
+
   final _pending = <String>{};
   Timer? _flush;
   final _subs = <StreamSubscription>[];
@@ -153,6 +193,7 @@ class Engine {
   int _eventSlots = 0;
   static const _eventCap = 4;
   final _accepting = <String, Future<bool>>{};
+
   /// A replacement group key that arrived before the owner's departure.
   final _pendingGroupKey = <String, ({String from, String key})>{};
 
@@ -178,6 +219,10 @@ class Engine {
   // lifecycle
 
   Future<void> start(String dataDir) async {
+    _coin ??= CoinLedger(this);
+    try {
+      await _coin!.ensureGrant();
+    } catch (_) {}
     _dataDir = dataDir;
     db.deleteExpired(nowMs());
     for (final item in db.legacyQueuedMessages()) {
@@ -189,6 +234,7 @@ class Engine {
     _loadOutgoingInvites();
     _bindStarted = DateTime.now();
     _applyNetOptions();
+    net.setPreferredRelay(db.getKv('prefRelay'));
     try {
       await net.start(
         secret: me.seed,
@@ -237,6 +283,7 @@ class Engine {
         unawaited(_tick());
         unawaited(_flushOutbox());
         unawaited(flushDeliveries());
+        unawaited(_publishDue());
       }),
     );
     _timers.add(
@@ -251,6 +298,9 @@ class Engine {
       Timer.periodic(const Duration(seconds: 60), (_) => _announceHere()),
     );
     _emit({Ch.net});
+    try {
+      await _coin?.join();
+    } catch (_) {}
   }
 
   bool get _bindInFlight =>
@@ -330,6 +380,7 @@ class Engine {
 
   Future<void> _joinMesh() async {
     try {
+      await _coin?.join();
       await _joinFeedTopic(me.id, const []);
       for (final p in db.peers().where((p) => p.iFollow && !p.blocked)) {
         await _joinFeedTopic(p.id, [p.id]);
@@ -347,6 +398,11 @@ class Engine {
   Future<void> stop() async {
     _running = false;
     _held = true;
+    final coin = _coin;
+    if (coin != null) {
+      await coin.dispose();
+      _coin = null;
+    }
     for (final gate in _eventWaiters) {
       if (!gate.isCompleted) gate.complete();
     }
@@ -380,7 +436,9 @@ class Engine {
   }
 
   void updateSettings(Settings s) {
-    final rebind = s.privacy != _settings.privacy || (s.privacy == 'tor' && s.proxyUrl != _settings.proxyUrl);
+    final rebind =
+        s.privacy != _settings.privacy ||
+        (s.privacy == 'tor' && s.proxyUrl != _settings.proxyUrl);
     final profileChanged =
         s.keepPosts != _settings.keepPosts ||
         s.keepProfile != _settings.keepProfile ||
@@ -547,6 +605,10 @@ class Engine {
       targets.addAll(g.members);
       targets.add(g.owner);
     }
+    for (final s in db.spaces()) {
+      targets.add(s.owner);
+      targets.addAll(_joinedMembers(s.id));
+    }
     targets.removeAll(_links);
     targets.remove(me.id);
     final batch = targets.take(24).toList();
@@ -578,7 +640,15 @@ class Engine {
           unawaited(flushDeliveries());
           await _hello(peer);
           db.reviveOutbox(peer);
+          await _onSpacePeer(peer);
           await _flushOutbox();
+          unawaited(_retrySync(peer));
+          unawaited(_coin?.onPeer(peer));
+          for (final listing in marketBoard().where(
+            (r) => r['from'] == me.id,
+          )) {
+            unawaited(sendApp(peer, 'market', listing));
+          }
         } else {
           _links.remove(peer);
           _emit({Ch.presence, Ch.net});
@@ -594,7 +664,10 @@ class Engine {
       case NeighborEvent(:final topic, :final peer, :final up):
         final set = _neighbors.putIfAbsent(topic, () => <String>{});
         up ? set.add(peer) : set.remove(peer);
-        if (up) _heard(peer);
+        if (up) {
+          _heard(peer);
+          if (topic == Coin.topic) unawaited(_coin?.onPeer(peer));
+        }
         _emit({Ch.net, Ch.presence});
       case StatusEvent():
         _sawStatus = true;
@@ -745,6 +818,7 @@ class Engine {
     if (!db.beginDelivery(job)) return;
     _emit({scope, Ch.chats});
     final sent = await _send(job.peer, {'t': 'item', 'e': item.e.toWire()});
+    if (sent) unawaited(_noteHop(job.id, job.peer));
     // Conditional update preserves receipts/cancellation arriving during I/O.
     db.finishDelivery(job, sent: sent);
     _emit({scope, Ch.chats});
@@ -858,6 +932,10 @@ class Engine {
       'v': 1,
       'profile': profile?.toWire(),
       'reply': reply,
+      'pubs': [
+        for (final s in db.spaces())
+          if (s.public && s.owner == me.id) {'id': s.id, 'name': s.name},
+      ],
     });
   }
 
@@ -868,6 +946,10 @@ class Engine {
         final e = Envelope.fromWire(m['profile']);
         if (e != null && e.author == from) await ingest(e, via: from);
         db.ensurePeer(from);
+        if (m['pubs'] is List) {
+          db.setKv('pubs:$from', jsonEncode(m['pubs']));
+          _emit({Ch.spaces});
+        }
         if (m['reply'] != true) {
           _helloAt.remove(from);
           await _hello(from, reply: true);
@@ -959,7 +1041,13 @@ class Engine {
       case 'revoke':
         final scope = m['scope'] as String? ?? '';
         await _onRevoke(from, scope);
+      case 'adclaim':
+        _noteAdClaim(from, m['id'] as String? ?? '');
       case 'xfer':
+        if (xferHeld && m['op'] == 'offer') {
+          await _send(from, {'t': 'xfer', 'op': 'decline', 'id': m['id']});
+          break;
+        }
         await _onXfer(from, m);
       case 'group':
         final e = Envelope.fromWire(m['e']);
@@ -967,12 +1055,48 @@ class Engine {
       case 'ginvite':
         await _onGroupInvite(from, m);
       case 'call':
-        if (!(db.peer(from)?.blocked ?? false)) _callSignals.add((from: from, m: m));
+        if (!(db.peer(from)?.blocked ?? false))
+          _callSignals.add((from: from, m: m));
+      case 'space-packet':
+        final sid = m['space'];
+        final data = m['data'];
+        if (sid is String &&
+            data is String &&
+            db.space(sid) != null &&
+            !(db.peer(from)?.blocked ?? false)) {
+          try {
+            await _onGossip(
+              _topicFor('mentos-space:$sid'),
+              from,
+              base64Decode(data),
+            );
+          } catch (_) {}
+        }
       case 'app':
         final app = m['app'];
         final body = m['b'];
-        if (app is String && body is Map && !(db.peer(from)?.blocked ?? false)) {
-          _appMessages.add((from: from, app: app, m: body.cast<String, dynamic>()));
+        if (app is String &&
+            body is Map &&
+            !(db.peer(from)?.blocked ?? false)) {
+          final cast = body.cast<String, dynamic>();
+          if (app == 'market') _saveMarket(from, cast);
+          if (app == 'task') await receiveTask(from, cast);
+          if (app == 'channel-invite' && cast['id'] is String) {
+            noteActivity(
+              Activity(
+                id: 'channel-invite:${cast['id']}',
+                kind: 'invite',
+                actor: from,
+                ts: nowMs(),
+                text: 'invited you to ${cast['name'] ?? 'a channel'}',
+              ),
+              title: nameOf(from),
+              body: 'Channel invitation',
+              route: '/ch/$from/${cast['id']}',
+              category: 'channel',
+            );
+          }
+          _appMessages.add((from: from, app: app, m: cast));
         }
       case 'gkey':
         final gid = m['id'] as String? ?? '';
@@ -1012,7 +1136,9 @@ class Engine {
         final g = db.group(gid);
         final pending = _outgoingInvites[gid];
         final invitedAt = pending?[from];
-        final fresh = invitedAt != null && nowMs() - invitedAt < _inviteTtl.inMilliseconds;
+        final fresh =
+            invitedAt != null &&
+            nowMs() - invitedAt < _inviteTtl.inMilliseconds;
         if (invitedAt != null) {
           pending!.remove(from);
           _saveOutgoingInvites();
@@ -1161,7 +1287,8 @@ class Engine {
       final wire = item.e.toWire();
       final size = utf8.encode(jsonEncode(wire)).length;
       if (size > maxBytes) continue;
-      if (part.isNotEmpty && (part.length >= maxCount || bytes + size > maxBytes)) {
+      if (part.isNotEmpty &&
+          (part.length >= maxCount || bytes + size > maxBytes)) {
         batches.add(part);
         part = <Object?>[];
         bytes = 0;
@@ -1264,16 +1391,44 @@ class Engine {
     return _joinedMembers(s.id).contains(peer);
   }
 
-  Set<String> _joinedMembers(String spaceId) {
+  /// Latest join/leave per author. A later record replaces an earlier one.
+  /// Equal timestamps break ties by id so two devices fold the same way.
+  Map<String, bool> _membership(String spaceId) {
     final announced = <String, bool>{};
     final all = [
       ...db.itemsInScope(Scope.spaceMeta(spaceId)),
       ..._memIn(Scope.spaceMeta(spaceId)),
     ];
+    all.sort((a, b) {
+      final byTime = a.ts.compareTo(b.ts);
+      return byTime != 0 ? byTime : a.id.compareTo(b.id);
+    });
     for (final i in all.where((i) => i.e.kind == K.member)) {
       announced[i.author] = i.body['left'] != true;
     }
-    return announced.entries.where((e) => e.value).map((e) => e.key).toSet();
+    return announced;
+  }
+
+  Set<String> _joinedMembers(String spaceId) =>
+      _membership(spaceId).entries
+          .where((e) => e.value)
+          .map((e) => e.key)
+          .toSet();
+
+  Envelope? _ownMemberRecord(String spaceId) {
+    Item? latest;
+    for (final i in [
+      ...db.itemsInScope(Scope.spaceMeta(spaceId)),
+      ..._memIn(Scope.spaceMeta(spaceId)),
+    ]) {
+      if (i.e.kind != K.member || i.author != me.id) continue;
+      if (latest == null ||
+          i.ts > latest.ts ||
+          (i.ts == latest.ts && i.id.compareTo(latest.id) > 0)) {
+        latest = i;
+      }
+    }
+    return latest?.e;
   }
 
   Set<String> _spaceAudience(SpaceInfo s) {
@@ -1305,7 +1460,10 @@ class Engine {
 
   /// First remaining member, in a stable order, when the owner is gone.
   String? _groupHeir(GroupInfo g) {
-    final rest = [for (final m in g.members) if (m != g.owner) m]..sort();
+    final rest = [
+      for (final m in g.members)
+        if (m != g.owner) m,
+    ]..sort();
     if (rest.isEmpty) return null;
     return rest.first;
   }
@@ -1355,16 +1513,153 @@ class Engine {
     await _shareGroupKey(g, base64Encode(randomBytes(32)));
   }
 
+  String _spacePacketId(String spaceId, String peer, Map<String, dynamic> msg) {
+    final type = msg['t']?.toString() ?? 'm';
+    if (type == 'item') {
+      final wire = msg['e'];
+      if (wire is Map && wire['id'] is String) {
+        return 'sp:$spaceId:$peer:${wire['id']}';
+      }
+    }
+    final scope = msg['scope']?.toString() ?? '';
+    final n = msg['es'] is List ? (msg['es'] as List).length : 0;
+    return 'sp:$spaceId:$peer:$type:$scope:$n';
+  }
+
+  Future<bool> _queueSpacePacket(
+    SpaceInfo s,
+    String peer,
+    Map<String, dynamic> msg, {
+    required String id,
+  }) async {
+    final key = _sealKey(s.key);
+    if (key == null || peer == me.id || s.roles[peer] == Role.banned)
+      return false;
+    if (db.peer(peer)?.blocked ?? false) return false;
+    final sealed = await Seal.close(key, utf8.encode(jsonEncode(msg)));
+    return _sendOrQueue(id, peer, {
+      't': 'space-packet',
+      'space': s.id,
+      'data': base64Encode(sealed),
+    });
+  }
+
+  Future<bool> _spaceDirect(
+    SpaceInfo s,
+    String peer,
+    Map<String, dynamic> msg,
+  ) async {
+    final key = _sealKey(s.key);
+    if (key == null || peer == me.id || s.roles[peer] == Role.banned)
+      return false;
+    final sealed = await Seal.close(key, utf8.encode(jsonEncode(msg)));
+    return _send(peer, {
+      't': 'space-packet',
+      'space': s.id,
+      'data': base64Encode(sealed),
+    });
+  }
+
+  /// Direct encrypted delivery is what counts. A topic broadcast can report
+  /// success before gossip has a neighbor, and that used to drop the retry.
   Future<bool> _spaceSend(SpaceInfo s, Map<String, dynamic> msg) async {
     final key = _sealKey(s.key);
     if (key == null) return false;
-    try {
-      final t = _topicFor('mentos-space:${s.id}');
-      final sealed = await Seal.close(key, utf8.encode(jsonEncode(msg)));
-      return await net.broadcast(t, sealed);
-    } catch (_) {
-      return false;
+    final peers = [
+      for (final p in _spaceAudience(s))
+        if (p != me.id &&
+            s.roles[p] != Role.banned &&
+            !(db.peer(p)?.blocked ?? false))
+          p,
+    ];
+    final sealed = await Seal.close(key, utf8.encode(jsonEncode(msg)));
+    final packet = {
+      't': 'space-packet',
+      'space': s.id,
+      'data': base64Encode(sealed),
+    };
+    var all = true;
+    for (final peer in peers) {
+      final ok = await _sendOrQueue(
+        _spacePacketId(s.id, peer, msg),
+        peer,
+        packet,
+      );
+      if (!ok) all = false;
     }
+    final topic = _topicFor('mentos-space:${s.id}');
+    if (_neighbors[topic]?.isNotEmpty ?? false) {
+      try {
+        await net.broadcast(topic, sealed);
+      } catch (_) {}
+    }
+    return peers.isEmpty || all;
+  }
+
+  Future<void> _announceMembershipTo(SpaceInfo s, String peer) async {
+    final record = _ownMemberRecord(s.id);
+    if (record == null) return;
+    await _queueSpacePacket(s, peer, {
+      't': 'item',
+      'e': record.toWire(),
+    }, id: 'smem:${s.id}:$peer');
+  }
+
+  /// Push our join or leave, and ask for the roster, once [peer] is reachable.
+  Future<void> _onSpacePeer(String peer) async {
+    if (peer == me.id) return;
+    for (final s in db.spaces()) {
+      if (s.roles[peer] == Role.banned) continue;
+      if (peer != s.owner && !_spaceAudience(s).contains(peer)) continue;
+      db.reviveOutbox('space:${s.id}');
+      await _announceMembershipTo(s, peer);
+      await _queueSpacePacket(s, peer, {
+        't': 'q',
+        'scope': Scope.spaceMeta(s.id),
+        'a': me.id,
+        'since': 0,
+      }, id: 'sq:${s.id}:$peer');
+    }
+  }
+
+  Future<void> _shareSpaceRoster(SpaceInfo s, String peer) async {
+    final meta = [
+      ...db.itemsInScope(Scope.spaceMeta(s.id)),
+      ..._memIn(Scope.spaceMeta(s.id)),
+    ];
+    for (var offset = 0; offset < meta.length; offset += 40) {
+      await _queueSpacePacket(s, peer, {
+        't': 'items',
+        'es': meta.skip(offset).take(40).map((i) => i.e.toWire()).toList(),
+      }, id: 'sroster:${s.id}:$peer:$offset');
+    }
+  }
+
+  void _releaseSavedSpaceMessages(String spaceId) {
+    final s = db.space(spaceId);
+    if (s == null) return;
+    final peers = _spaceAudience(s)..remove(me.id);
+    peers.removeWhere((p) => db.peer(p)?.blocked ?? false);
+    if (peers.isEmpty) return;
+    final scopes = [
+      Scope.spaceFeed(spaceId),
+      for (final c in s.channels) Scope.channel(spaceId, c.id),
+      for (final c in s.forums) Scope.forum(spaceId, c.id),
+    ];
+    var changed = false;
+    for (final scope in scopes) {
+      for (final item in db.itemsInScope(scope)) {
+        if (!item.owned || item.e.kind != K.msg) continue;
+        final jobs = db.deliveries(item.id);
+        if (jobs.isEmpty || !jobs.every((j) => j.state == Delivery.saved))
+          continue;
+        db.enrollDeliveries(item.id, peers);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    _emit({Ch.chats, Ch.feed, Ch.spaces});
+    unawaited(flushDeliveries());
   }
 
   Future<bool> _feedSend(Map<String, dynamic> msg, {String? author}) async {
@@ -1374,6 +1669,14 @@ class Engine {
 
   Future<void> _onGossip(String topic, String from, Uint8List data) async {
     _heard(from);
+    if (topic == Coin.topic) {
+      if (!(db.peer(from)?.blocked ?? false)) {
+        final m = _decode(data);
+        final coin = _coin;
+        if (m != null && coin != null) await coin.onMessage(from, m);
+      }
+      return;
+    }
     final spaceId = _spaceTopics[topic];
     if (spaceId != null) {
       final s = db.space(spaceId);
@@ -1387,6 +1690,13 @@ class Engine {
       final a = m['a'] as String?;
       if (a != null) _heard(a);
       switch (m['t']) {
+        case 'items':
+          for (final raw
+              in m['es'] is List ? (m['es'] as List).take(120) : const []) {
+            final e = Envelope.fromWire(raw);
+            if (e != null && Scope.spaceOf(e.scope) == spaceId)
+              await ingest(e, via: from, sealed: true);
+          }
         case 'item':
           final e = Envelope.fromWire(m['e']);
           if (e != null && Scope.spaceOf(e.scope) == spaceId) {
@@ -1408,7 +1718,7 @@ class Engine {
                 .toList();
             if (items.isNotEmpty) {
               for (var i = 0; i < items.length; i += 120) {
-                await _send(a, {
+                await _spaceDirect(s, a, {
                   't': 'items',
                   'es': items
                       .skip(i)
@@ -1571,6 +1881,19 @@ class Engine {
       _mem[e.id] = _Mem(item, {e.author, ?via});
     }
     await _sideEffects(e, via);
+    if (e.kind == K.msg && db.getKv('hop:${e.id}') == null) {
+      final hops = <String>[e.author];
+      if (via != null && via != e.author && via != me.id) hops.add(via);
+      hops.add(me.id);
+      db.setKv('hop:${e.id}', jsonEncode(hops));
+    }
+    if (e.kind == K.post &&
+        e.body['ad'] == true &&
+        e.author != me.id &&
+        db.getKv('adclaim:${e.id}') != '1') {
+      db.setKv('adclaim:${e.id}', '1');
+      unawaited(_send(e.author, {'t': 'adclaim', 'id': e.id}));
+    }
     _emit({e.scope, ..._derivedKeys(e)});
     return true;
   }
@@ -1698,9 +2021,12 @@ class Engine {
         // Cleaning the whole scope used to delete a chat when a profile
         // arrived there.
         if (e.scope == Scope.profile(e.author)) {
-          for (final old in db.itemsInScope(e.scope).where(
-            (i) => !i.owned && i.id != e.id && i.e.kind == K.profile,
-          )) {
+          for (final old
+              in db
+                  .itemsInScope(e.scope)
+                  .where(
+                    (i) => !i.owned && i.id != e.id && i.e.kind == K.profile,
+                  )) {
             db.deleteItem(old.id);
           }
         }
@@ -1715,16 +2041,24 @@ class Engine {
         }
         if (e.author != me.id) {
           final text = (e.body['text'] as String?)?.trim() ?? '';
-          final gid = type == 'gdm' ? Scope.parts(e.scope).elementAtOrNull(1) : null;
+          final gid = type == 'gdm'
+              ? Scope.parts(e.scope).elementAtOrNull(1)
+              : null;
           final group = gid == null ? null : db.group(gid);
           _notify(
             at: e.ts,
             id: 'msg:${e.id}',
-            title: group == null ? nameOf(e.author) : '${nameOf(e.author)} · ${group.name}',
+            title: group == null
+                ? nameOf(e.author)
+                : '${nameOf(e.author)} · ${group.name}',
             body: text.isNotEmpty ? text : 'New message',
-            route: type == 'dm' ? '/chat/${e.author}' : (gid != null ? '/g/$gid' : '/chats'),
+            route: type == 'dm'
+                ? '/chat/${e.author}'
+                : (gid != null ? '/g/$gid' : '/chats'),
             scope: e.scope,
-            category: type == 'dm' ? 'dm' : (mentionsMe(text) ? 'mention' : 'group'),
+            category: type == 'dm'
+                ? 'dm'
+                : (mentionsMe(text) ? 'mention' : 'group'),
           );
         }
       case K.story:
@@ -1793,16 +2127,22 @@ class Engine {
       case K.like when e.body['sub'] == true:
         final target = e.target;
         final chan = target == null ? null : db.item(target);
-        if (Scope.postAuthor(e.scope) == me.id && chan != null && chan.owned && chan.e.kind == K.chan && e.body['on'] != false) {
-          db.addActivity(Activity(
-            id: 'sub:${e.author}:$target',
-            kind: 'subscribe',
-            actor: e.author,
-            ref: target,
-            scope: e.scope,
-            text: chan.body['name'] as String?,
-            ts: e.ts,
-          ));
+        if (Scope.postAuthor(e.scope) == me.id &&
+            chan != null &&
+            chan.owned &&
+            chan.e.kind == K.chan &&
+            e.body['on'] != false) {
+          db.addActivity(
+            Activity(
+              id: 'sub:${e.author}:$target',
+              kind: 'subscribe',
+              actor: e.author,
+              ref: target,
+              scope: e.scope,
+              text: chan.body['name'] as String?,
+              ts: e.ts,
+            ),
+          );
           _notify(
             at: e.ts,
             id: 'sub:${e.author}:$target',
@@ -1841,17 +2181,23 @@ class Engine {
         }
       case K.react when type == 'story':
         final target = e.target;
-        if (target != null && Scope.parts(e.scope).elementAtOrNull(1) == me.id && e.body['on'] != false) {
-          final emoji = e.body['emoji'] is String ? e.body['emoji'] as String : '';
-          db.addActivity(Activity(
-            id: 'sreact:${e.author}:$target',
-            kind: 'react',
-            actor: e.author,
-            ref: target,
-            scope: e.scope,
-            text: emoji,
-            ts: e.ts,
-          ));
+        if (target != null &&
+            Scope.parts(e.scope).elementAtOrNull(1) == me.id &&
+            e.body['on'] != false) {
+          final emoji = e.body['emoji'] is String
+              ? e.body['emoji'] as String
+              : '';
+          db.addActivity(
+            Activity(
+              id: 'sreact:${e.author}:$target',
+              kind: 'react',
+              actor: e.author,
+              ref: target,
+              scope: e.scope,
+              text: emoji,
+              ts: e.ts,
+            ),
+          );
           _notify(
             at: e.ts,
             id: 'sreact:${e.author}:$target:$emoji',
@@ -1910,10 +2256,15 @@ class Engine {
         final sid = Scope.spaceOf(e.scope)!;
         final s = db.space(sid);
         if (s != null &&
+            e.author != me.id &&
             e.body['left'] == true &&
-            s.owner == me.id &&
-            e.author != me.id) {
-          await _rotateSpaceKey(s);
+            s.owner == me.id) {
+          // Remaining members still hold this key, so they can read the leave.
+          await _spaceSend(s, {'t': 'item', 'e': e.toWire()});
+          await _rotateSpaceKey(db.space(sid)!);
+        } else if (s != null && e.author != me.id && e.body['left'] != true) {
+          _releaseSavedSpaceMessages(sid);
+          if (s.owner == me.id) unawaited(_shareSpaceRoster(s, e.author));
         }
         if (s != null) _emit({Ch.spaces});
       case K.group:
@@ -2096,10 +2447,10 @@ class Engine {
     if (peer == null) return;
     if (on) {
       db.setGrant(scope, peer, GrantDir.out, GrantState.pending);
-      await _send(peer, {'t': 'sync', 'op': 'offer', 'scope': scope});
+      await _sendSync(peer, scope, 'offer');
     } else {
       db.setGrant(scope, peer, GrantDir.out, null);
-      await _send(peer, {'t': 'sync', 'op': 'revoke', 'scope': scope});
+      await _sendSync(peer, scope, 'revoke');
     }
     _emit({Ch.grants, scope, Ch.chats});
   }
@@ -2107,7 +2458,7 @@ class Engine {
   Future<void> acceptSync(String scope, String peer, bool accept) async {
     if (accept) {
       db.setGrant(scope, peer, GrantDir.inbound, GrantState.active);
-      await _send(peer, {'t': 'sync', 'op': 'accept', 'scope': scope});
+      await _sendSync(peer, scope, 'accept');
       _promote((i) => i.e.scope == scope && i.author == peer);
     } else {
       db.setGrant(scope, peer, GrantDir.inbound, null);
@@ -2308,6 +2659,9 @@ class Engine {
     String? bcastId,
     bool silent = false,
     Map<String, Object?>? live,
+    bool ad = false,
+    int? budget,
+    Map<String, dynamic>? preview,
   }) {
     final scope = bcastId != null
         ? Scope.bcast(me.id, bcastId)
@@ -2332,7 +2686,10 @@ class Engine {
       if (ai) 'ai': true,
       if (nsfw) 'nsfw': true,
       if (silent) 'silent': true,
+      if (ad) 'ad': true,
+      if (budget != null && budget > 0) 'budget': budget,
       'live': ?live,
+      'pv': ?LinkPreview.fromJson(preview)?.toJson(),
     }, keep: k);
   }
 
@@ -2370,12 +2727,14 @@ class Engine {
     story: {
       'id': s.id,
       'a': s.author,
-      if (s.body['text'] is String) 'text': _clip(s.body['text'] as String, 120),
+      if (s.body['text'] is String)
+        'text': _clip(s.body['text'] as String, 120),
       'prompt': ?prompt,
     },
   );
 
-  static String _clip(String s, int n) => s.length <= n ? s : '${s.substring(0, n)}…';
+  static String _clip(String s, int n) =>
+      s.length <= n ? s : '${s.substring(0, n)}…';
 
   Future<void> recordView(Item item) async {
     if (item.author == me.id) return;
@@ -2393,11 +2752,16 @@ class Engine {
     );
   }
 
-  Future<void> comment(PostView post, String text, {String? replyTo}) =>
-      _publish(K.comment, post.scope, {
-        'text': text,
-        'replyTo': ?replyTo,
-      }, keep: _settings.keepReplies);
+  Future<void> comment(
+    PostView post,
+    String text, {
+    String? replyTo,
+    List<MediaRef> media = const [],
+  }) => _publish(K.comment, post.scope, {
+    'text': text,
+    'replyTo': ?replyTo,
+    if (media.isNotEmpty) 'media': media.map((m) => m.toJson()).toList(),
+  }, keep: _settings.keepReplies);
 
   Future<void> like(String scope, String target, bool on) => _publish(
     K.like,
@@ -2437,6 +2801,10 @@ class Engine {
     bool forwarded = false,
     bool nsfw = false,
     Map<String, dynamic>? story,
+    bool sticker = false,
+    String? gif,
+    Map<String, dynamic>? loc,
+    Map<String, dynamic>? preview,
   }) {
     final keep = switch (Scope.type(scope)) {
       'dm' => true,
@@ -2455,6 +2823,10 @@ class Engine {
       'poll': ?poll?.toJson(),
       if (forwarded) 'fwd': true,
       if (nsfw) 'nsfw': true,
+      if (sticker) 'stk': true,
+      if (gif != null && gif.isNotEmpty) 'gif': gif,
+      'loc': ?LiveFix.parse(loc)?.toJson(),
+      'pv': ?LinkPreview.fromJson(preview)?.toJson(),
       'story': ?story,
       if (ttl > 0) 'exp': nowMs() + ttl * 1000,
     }, keep: keep);
@@ -2469,6 +2841,32 @@ class Engine {
 
   Future<void> edit(String scope, String target, String text) =>
       _publish(K.edit, scope, {'target': target, 'text': text}, keep: true);
+
+  /// Publishes a newer GPS fix for a live-location message this device sent.
+  /// Only the latest fix is kept; the previous update is removed.
+  Future<void> publishLiveFix(
+    String scope,
+    String target,
+    Map<String, dynamic> loc,
+  ) async {
+    final fix = LiveFix.parse(loc);
+    if (fix == null) return;
+    final e = await _publish(K.edit, scope, {
+      'target': target,
+      'loc': fix.toJson(),
+    }, keep: true);
+    final prev = db.getKv('locedit:$target');
+    db.setKv('locedit:$target', e.id);
+    if (prev != null && prev != e.id) {
+      final old = db.item(prev);
+      if (old != null &&
+          old.e.kind == K.edit &&
+          old.e.target == target &&
+          old.author == me.id) {
+        await deleteItem(old);
+      }
+    }
+  }
 
   /// Deletes an item everywhere it was shared. Own items are removed
   /// physically; moderators can remove others' items in spaces.
@@ -2503,13 +2901,7 @@ class Engine {
     if (scope.startsWith('dm:')) {
       final peer = Scope.dmPeer(scope, me.id);
       if (peer == null) return;
-      unawaited(
-        _send(peer, {
-          't': 'typing',
-          'scope': scope,
-          'on': on,
-        }),
-      );
+      unawaited(_send(peer, {'t': 'typing', 'scope': scope, 'on': on}));
     } else if (scope.startsWith('gdm:')) {
       final g = db.group(Scope.parts(scope)[1]);
       if (g != null) {
@@ -2788,6 +3180,7 @@ class Engine {
     await _publish(K.member, Scope.spaceMeta(s.id), {
       'name': myProfile.name,
     }, keep: true);
+    if (s.owner != me.id) unawaited(net.connect(s.owner));
     _emit({Ch.spaces});
     unawaited(
       Future.delayed(const Duration(seconds: 2), () => refreshSpace(s.id)),
@@ -2885,9 +3278,17 @@ class Engine {
   Future<void> leaveSpace(String spaceId) async {
     final s = db.space(spaceId);
     if (s == null) return;
-    await _publish(K.member, Scope.spaceMeta(spaceId), {
-      'left': true,
-    }, keep: true);
+    final leaving = await Envelope.create(
+      me,
+      kind: K.member,
+      scope: Scope.spaceMeta(spaceId),
+      body: {'left': true},
+      keep: true,
+    );
+    db.putItem(leaving, owned: true);
+    // Queue to each person before the space row disappears. A space-scoped
+    // outbox row is dropped once the local space is gone.
+    await _spaceSend(db.space(spaceId)!, {'t': 'item', 'e': leaving.toWire()});
     await net.leave(_topicFor('mentos-space:$spaceId'));
     _spaceTopics.remove(_topicFor('mentos-space:$spaceId'));
     db.deleteSpace(spaceId);
@@ -2902,16 +3303,9 @@ class Engine {
   List<({String id, Role role, bool online})> members(String spaceId) {
     final s = db.space(spaceId);
     if (s == null) return const [];
-    final announced = <String, bool>{};
-    final all = [
-      ...db.itemsInScope(Scope.spaceMeta(spaceId)),
-      ..._memIn(Scope.spaceMeta(spaceId)),
-    ]..sort((a, b) => a.ts.compareTo(b.ts));
-    for (final i in all.where((i) => i.e.kind == K.member)) {
-      announced[i.author] = i.body['left'] != true;
-    }
-    announced[s.owner] = true;
-    announced[me.id] = true;
+    final announced = _membership(spaceId);
+    announced.putIfAbsent(s.owner, () => true);
+    announced.putIfAbsent(me.id, () => true);
     final out = announced.entries
         .where((e) => e.value && s.roleOf(e.key) != Role.banned)
         .map((e) => (id: e.key, role: s.roleOf(e.key), online: isOnline(e.key)))
@@ -3066,12 +3460,18 @@ class Engine {
         ai: p.body['ai'] == true,
         nsfw: p.body['nsfw'] == true,
         views: (f.views[p.id] ?? const <String>{}).length,
-        viewers: p.author == me.id ? (f.views[p.id] ?? const <String>{}).toList() : const [],
+        viewers: p.author == me.id
+            ? (f.views[p.id] ?? const <String>{}).toList()
+            : const [],
+        likers: p.author == me.id ? likes.toList() : const [],
         channelId:
-            (p.body['channel'] is String ? p.body['channel'] as String : null) ??
+            (p.body['channel'] is String
+                ? p.body['channel'] as String
+                : null) ??
             (const {'bcast', 'chan'}.contains(Scope.type(p.e.scope))
                 ? Scope.parts(p.e.scope).last
                 : null),
+        preview: LinkPreview.fromJson(p.body['pv']),
       );
     }).toList();
   }
@@ -3115,7 +3515,10 @@ class Engine {
         likes: likes.length,
         liked: likes.contains(me.id),
         edited: ed != null,
-        replyTo: c.body['replyTo'] is String ? c.body['replyTo'] as String : null,
+        replyTo: c.body['replyTo'] is String
+            ? c.body['replyTo'] as String
+            : null,
+        media: MediaRef.listFrom(c.body['media']),
       );
     }).toList();
   }
@@ -3175,6 +3578,9 @@ class Engine {
         expires: m.e.expires,
         forwarded: m.body['fwd'] == true,
         nsfw: m.body['nsfw'] == true,
+        hops: hopsFor(m.id),
+        loc: LiveFix.latest(m.body['loc'], f.locs[m.id]),
+        preview: LinkPreview.fromJson(m.body['pv']),
       );
       views[m.id] = v;
       out.add(v);
@@ -3363,18 +3769,588 @@ class Engine {
 
   /// Gossip topic id -> what it carries, for the explorers.
   Map<String, String> topicLabels() => {
-        for (final e in _spaceTopics.entries) e.key: 'space · ${db.space(e.value)?.name ?? shortId(e.value)}',
-        for (final e in _feedTopics.entries) e.key: 'posts · ${nameOf(e.value)}',
-        for (final e in _groupTopics.entries) e.key: 'group · ${db.group(e.value)?.name ?? shortId(e.value)}',
-      };
+    for (final e in _spaceTopics.entries)
+      e.key: 'space · ${db.space(e.value)?.name ?? shortId(e.value)}',
+    for (final e in _feedTopics.entries) e.key: 'posts · ${nameOf(e.value)}',
+    for (final e in _groupTopics.entries)
+      e.key: 'group · ${db.group(e.value)?.name ?? shortId(e.value)}',
+  };
 
   /// When [peer] was last heard from on any path, ms since epoch.
   int lastHeardFrom(String peer) => _lastHeard[peer] ?? 0;
   int get topicCount =>
       _spaceTopics.length + _feedTopics.length + _groupTopics.length;
 
-  List<FileTransfer> transfers() =>
-      _xfers.values.toList()..sort((a, b) => b.started.compareTo(a.started));
+  String? get preferredRelay {
+    final v = db.getKv('prefRelay');
+    if (v == null || v.isEmpty) return null;
+    return v;
+  }
+
+  void preferRelay(String? url) {
+    final t = url?.trim() ?? '';
+    db.setKv('prefRelay', t);
+    net.setPreferredRelay(t.isEmpty ? null : t);
+    _emit({Ch.net});
+  }
+
+  bool get xferHeld => db.getKv('xferHold') == '1';
+
+  void setXferHeld(bool on) {
+    db.setKv('xferHold', on ? '1' : '0');
+    _emit({Ch.xfers});
+  }
+
+  String chatFolder(String scope) => db.getKv('folder:$scope') ?? '';
+
+  void setChatFolder(String scope, String name) {
+    final t = name.trim();
+    if (t.isEmpty) {
+      db.setKv('folder:$scope', '');
+    } else {
+      db.setKv('folder:$scope', t);
+    }
+    _emit({Ch.chats});
+  }
+
+  List<String> hopsFor(String id) {
+    final raw = db.getKv('hop:$id');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final j = jsonDecode(raw);
+      if (j is List)
+        return [
+          for (final x in j)
+            if (x is String && x.isNotEmpty) x,
+        ];
+    } catch (_) {}
+    return const [];
+  }
+
+  Future<void> _noteHop(String id, String peer) async {
+    final st = await netStatus();
+    final link = st.links.where((l) => l.peer == peer).firstOrNull;
+    final path =
+        link?.paths.where((p) => p.selected).firstOrNull ??
+        link?.paths.firstOrNull;
+    final hops = <String>[
+      me.id,
+      if (path != null) '${path.kind.name} · ${path.address}',
+      peer,
+    ];
+    db.setKv('hop:$id', jsonEncode(hops));
+  }
+
+  Future<void> _sendSync(String peer, String scope, String op) async {
+    final msg = {'t': 'sync', 'op': op, 'scope': scope};
+    final ok = await _send(peer, msg);
+    if (!ok) {
+      await _queueFanout('sync:$scope:$op', peer, msg, () => _send(peer, msg));
+    }
+  }
+
+  Future<void> _retrySync(String peer) async {
+    for (final g in db.grants()) {
+      if (g.peer != peer ||
+          g.dir != GrantDir.out ||
+          g.state != GrantState.pending)
+        continue;
+      await _send(peer, {'t': 'sync', 'op': 'offer', 'scope': g.scope});
+    }
+  }
+
+  List<HeldPost> _readHeld(String key) {
+    final raw = db.getKv(key);
+    if (raw == null || raw.isEmpty) return [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is! List) return [];
+      return [for (final x in d) ?HeldPost.fromJson(x)];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  void _putHeld(String key, List<HeldPost> items) {
+    db.setKv(key, jsonEncode([for (final p in items) p.toJson()]));
+    _emit({Ch.queue});
+  }
+
+  void _dropHeld(String key, String id) {
+    final list = _readHeld(key);
+    final next = [
+      for (final p in list)
+        if (p.key != id && p.id != id) p,
+    ];
+    if (next.length == list.length) return;
+    _putHeld(key, next);
+  }
+
+  void _saveHeld(String key, HeldPost post, {String? replaceKey}) {
+    final list = _readHeld(key);
+    final saved = post.id.isEmpty ? post.copyWith(id: newId()) : post;
+    final match = replaceKey ?? saved.id;
+    final i = list.indexWhere((p) => p.key == match || p.id == match);
+    if (i >= 0) {
+      list[i] = saved;
+    } else {
+      list.add(saved);
+    }
+    _putHeld(key, list);
+  }
+
+  /// Soonest first.
+  List<HeldPost> scheduledPosts() {
+    final list = _readHeld('scheduled');
+    list.sort((a, b) => a.at.compareTo(b.at));
+    return list;
+  }
+
+  /// Newest first.
+  List<HeldPost> postDrafts() {
+    final list = _readHeld('drafts');
+    list.sort((a, b) => b.at.compareTo(a.at));
+    return list;
+  }
+
+  void saveScheduled(HeldPost post, {String? replaceKey}) =>
+      _saveHeld('scheduled', post, replaceKey: replaceKey);
+
+  void savePostDraft(HeldPost post, {String? replaceKey}) =>
+      _saveHeld('drafts', post, replaceKey: replaceKey);
+
+  void deleteScheduled(String id) => _dropHeld('scheduled', id);
+
+  void deletePostDraft(String id) => _dropHeld('drafts', id);
+
+  Future<void> publishHeld(HeldPost post, {required bool draft}) async {
+    await createPost(
+      text: post.text,
+      title: post.title,
+      poll: post.poll,
+      keep: post.keep,
+      spaceId: post.spaceId,
+      boardId: post.boardId,
+      channelId: post.channelId,
+      bcastId: post.bcastId,
+      repost: post.repost,
+      ai: post.ai,
+      nsfw: post.nsfw,
+      ad: post.ad,
+      preview: await previewBody(post.text),
+    );
+    if (draft) {
+      deletePostDraft(post.key);
+    } else {
+      deleteScheduled(post.key);
+    }
+  }
+
+  Future<void> _publishDue() async {
+    final now = nowMs();
+    final left = <HeldPost>[];
+    var published = 0;
+    for (final item in _readHeld('scheduled')) {
+      if (!item.hasBody) {
+        if (item.at > now) {
+          left.add(item);
+        } else {
+          published++;
+        }
+        continue;
+      }
+      if (item.at > now) {
+        left.add(item);
+        continue;
+      }
+      try {
+        await createPost(
+          text: item.text,
+          title: item.title,
+          poll: item.poll,
+          keep: item.keep,
+          spaceId: item.spaceId,
+          boardId: item.boardId,
+          channelId: item.channelId,
+          bcastId: item.bcastId,
+          repost: item.repost,
+          ai: item.ai,
+          nsfw: item.nsfw,
+          ad: item.ad,
+          preview: await previewBody(item.text),
+        );
+        published++;
+      } catch (_) {
+        left.add(item);
+      }
+    }
+    if (published > 0) _putHeld('scheduled', left);
+  }
+
+  Future<void> schedulePost(
+    String text,
+    DateTime at, {
+    String? id,
+    String title = '',
+    bool ai = false,
+    bool nsfw = false,
+    bool ad = false,
+    bool keep = true,
+    String? spaceId,
+    String? boardId,
+    String? channelId,
+    String? bcastId,
+    Map<String, dynamic>? repost,
+    Poll? poll,
+  }) async {
+    saveScheduled(
+      HeldPost(
+        id: id ?? '',
+        text: text,
+        title: title,
+        at: at.millisecondsSinceEpoch,
+        ai: ai,
+        nsfw: nsfw,
+        ad: ad,
+        keep: keep,
+        spaceId: spaceId,
+        boardId: boardId,
+        channelId: channelId,
+        bcastId: bcastId,
+        repost: repost,
+        poll: poll,
+      ),
+      replaceKey: id,
+    );
+  }
+
+  List<Map<String, dynamic>> marketBoard() {
+    final raw = db.getKv('market');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is! List) return const [];
+      final rows = [
+        for (final x in d)
+          if (x is Map) x.cast<String, dynamic>(),
+      ];
+      final ids = rows.map((r) => r['id']).toSet();
+      return [
+        ...rows,
+        ..._kvList('task-records').where((r) => !ids.contains(r['id'])),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> postMarket(Map<String, dynamic> offer) async {
+    final previous = marketBoard()
+        .where((x) => x['id'] == offer['id'])
+        .firstOrNull;
+    if (previous != null && previous['from'] != me.id)
+      throw StateError('Only the publisher can update this listing');
+    if (offer['kind'] == 'plugin') validatePlugin(offer);
+    if (offer['title'] is! String ||
+        offer['minor'] is! int ||
+        (offer['minor'] as int) < 0)
+      throw ArgumentError('Invalid listing');
+    final row = {
+      ...offer,
+      'from': me.id,
+      'id': offer['id'] ?? '${me.id}:${toHex(randomBytes(12))}',
+      'revision': ((previous?['revision'] as int?) ?? 0) + 1,
+      'updated': nowMs(),
+    };
+    final list = [...marketBoard()]..removeWhere((m) => m['id'] == row['id']);
+    list.insert(0, row);
+    db.setKv('market', jsonEncode(list.take(80).toList()));
+    if (row['kind'] == 'task') {
+      db.setKv(
+        'task-records',
+        jsonEncode([
+          ..._kvList('task-records').where((r) => r['id'] != row['id']),
+          row,
+        ]),
+      );
+    }
+    for (final p in db.peers().where((p) => !p.blocked).take(32)) {
+      unawaited(
+        sendApp(
+          p.id,
+          'market',
+          row,
+          queueId: 'market:${row['id']}:${row['revision']}:${p.id}',
+        ),
+      );
+    }
+    _emit({Ch.feed});
+  }
+
+  void _saveMarket(String from, Map<String, dynamic> body) {
+    if (body['title'] is! String ||
+        body['minor'] is! int ||
+        (body['minor'] as int) < 0 ||
+        (body['minor'] as int) > Coin.maxAmount ||
+        (body['revision'] != null && body['revision'] is! int) ||
+        (body['about'] != null && body['about'] is! String) ||
+        (body['kind'] is! String))
+      return;
+    if (body['applications'] != null &&
+        (body['applications'] is! List ||
+            (body['applications'] as List).any((x) => x is! String)))
+      return;
+    if (body['worker'] != null && body['worker'] is! String) return;
+    if (body['status'] != null && body['status'] is! String) return;
+    if (body['timeline'] != null &&
+        (body['timeline'] is! List ||
+            (body['timeline'] as List).any(
+              (x) => x is! Map || x['actor'] is! String || x['ts'] is! int,
+            )))
+      return;
+    if (body['evidence'] != null &&
+        (body['evidence'] is! Map ||
+            (body['evidence'] as Map)['text'] is! String ||
+            (body['evidence'] as Map)['actor'] is! String))
+      return;
+    if (body['kind'] == 'plugin') {
+      try {
+        validatePlugin(body);
+      } catch (_) {
+        return;
+      }
+    }
+    final row = {...body, 'from': from};
+    final id = row['id'];
+    if (id is! String || id.length > 160 || jsonEncode(body).length > 32000)
+      return;
+    final list = [...marketBoard()];
+    final old = list.where((x) => x['id'] == id).firstOrNull;
+    if (old != null &&
+        (old['from'] != from ||
+            ((old['revision'] as int?) ?? 0) >=
+                ((row['revision'] as int?) ?? 0)))
+      return;
+    list.removeWhere((m) => m['id'] == id);
+    list.insert(0, row);
+    db.setKv('market', jsonEncode(list.take(80).toList()));
+    if (row['kind'] == 'task') {
+      db.setKv(
+        'task-records',
+        jsonEncode([
+          ..._kvList('task-records').where((r) => r['id'] != row['id']),
+          row,
+        ]),
+      );
+    }
+    _emit({Ch.feed});
+  }
+
+  void _noteAdClaim(String from, String id) {
+    if (id.isEmpty || from.isEmpty) return;
+    final raw = db.getKv('adclaims:$id') ?? '[]';
+    List list;
+    try {
+      final d = jsonDecode(raw);
+      list = d is List ? List.of(d) : <dynamic>[];
+    } catch (_) {
+      list = <dynamic>[];
+    }
+    if (!list.contains(from)) list.add(from);
+    db.setKv('adclaims:$id', jsonEncode(list));
+  }
+
+  List<String> adClaims(String id) {
+    final raw = db.getKv('adclaims:$id');
+    if (raw == null) return const [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is List)
+        return [
+          for (final x in d)
+            if (x is String) x,
+        ];
+    } catch (_) {}
+    return const [];
+  }
+
+  void removeMarket(String id) {
+    final row = marketBoard().where((r) => r['id'] == id).firstOrNull;
+    if (row == null || row['from'] != me.id) return;
+    unawaited(postMarket({...row, 'deleted': true}));
+  }
+
+  List<Map<String, dynamic>> _kvList(String key) {
+    final raw = db.getKv(key);
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final d = jsonDecode(raw);
+      if (d is! List) return const [];
+      return [
+        for (final x in d)
+          if (x is Map) x.cast<String, dynamic>(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<Map<String, dynamic>> installedPlugins() => _kvList('plugins');
+
+  bool pluginInstalled(String id) =>
+      installedPlugins().any((m) => m['id'] == id);
+
+  bool listingOwned(String id) => _kvList('bought').any((m) => m['id'] == id);
+
+  void noteOwned(String id) {
+    if (id.isEmpty || listingOwned(id)) return;
+    final list = [
+      ..._kvList('bought'),
+      {'id': id, 'at': nowMs()},
+    ];
+    db.setKv('bought', jsonEncode(list.take(80).toList()));
+  }
+
+  Future<void> installPlugin(Map<String, dynamic> row) async {
+    final id = row['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+    validatePlugin(row);
+    if ((row['minor'] as num? ?? 0) > 0 &&
+        row['from'] != me.id &&
+        !listingOwned(id))
+      throw StateError('Purchase this plugin first');
+    final list = [...installedPlugins()]..removeWhere((m) => m['id'] == id);
+    list.insert(0, {
+      'id': id,
+      'title': row['title'] ?? 'Plugin',
+      'plugin': row['plugin'] ?? 'stickers',
+      'about': row['about'] ?? '',
+      'body': row['body'] is Map ? row['body'] : const <String, dynamic>{},
+      'from': row['from'] ?? '',
+      'at': nowMs(),
+    });
+    db.setKv('plugins', jsonEncode(list.take(40).toList()));
+    _emit({Ch.feed});
+  }
+
+  void removePlugin(String id) {
+    final list = [...installedPlugins()]..removeWhere((m) => m['id'] == id);
+    db.setKv('plugins', jsonEncode(list));
+    _emit({Ch.feed});
+  }
+
+  List<String> installedStickers() {
+    final out = <String>[];
+    for (final pack in installedPlugins()) {
+      if (pack['plugin'] != 'stickers') continue;
+      final body = pack['body'];
+      final emoji = body is Map ? body['emoji'] : null;
+      if (emoji is! List) continue;
+      for (final x in emoji) {
+        if (x is String && x.trim().isNotEmpty) out.add(x);
+      }
+    }
+    return out;
+  }
+
+  List<({String title, List<String> lines})> installedPhrases() {
+    final out = <({String title, List<String> lines})>[];
+    for (final pack in installedPlugins()) {
+      if (pack['plugin'] != 'phrases') continue;
+      final body = pack['body'];
+      final raw = body is Map ? body['lines'] : null;
+      if (raw is! List) continue;
+      final lines = [
+        for (final x in raw)
+          if (x is String && x.trim().isNotEmpty) x,
+      ];
+      if (lines.isEmpty) continue;
+      out.add((title: pack['title'] as String? ?? 'Phrases', lines: lines));
+    }
+    return out;
+  }
+
+  List<({String id, String name, String from})> heardSpaces() {
+    final out = <({String id, String name, String from})>[];
+    for (final p in db.peers()) {
+      final raw = db.getKv('pubs:${p.id}');
+      if (raw == null) continue;
+      try {
+        final d = jsonDecode(raw);
+        if (d is! List) continue;
+        for (final x in d) {
+          if (x is Map && x['id'] is String && x['name'] is String) {
+            out.add((
+              id: x['id'] as String,
+              name: x['name'] as String,
+              from: p.id,
+            ));
+          }
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  List<FileTransfer> transfers() {
+    final live = _xfers.values.toList();
+    final ids = live.map((x) => x.id).toSet();
+    final extra = <FileTransfer>[];
+    try {
+      final raw = db.getKv('xfer_done');
+      final d = raw == null ? const [] : jsonDecode(raw);
+      if (d is List) {
+        for (final m in d) {
+          if (m is! Map) continue;
+          final id = m['id'];
+          if (id is! String || ids.contains(id)) continue;
+          extra.add(
+            FileTransfer(
+              id: id,
+              peer: m['peer'] as String? ?? '',
+              media: MediaRef(
+                hash: m['hash'] as String? ?? '',
+                key: m['key'] as String? ?? '',
+                name: m['name'] as String? ?? 'file',
+                mime: m['mime'] as String? ?? 'application/octet-stream',
+                size: (m['size'] as num?)?.toInt() ?? 0,
+              ),
+              dir: m['dir'] == 'out' ? XferDir.out : XferDir.inbound,
+              state: XferState.done,
+              started: (m['started'] as num?)?.toInt() ?? 0,
+              done: (m['size'] as num?)?.toInt() ?? 0,
+            ),
+          );
+        }
+      }
+    } catch (_) {}
+    return [...live, ...extra]..sort((a, b) => b.started.compareTo(a.started));
+  }
+
+  void _keepTransfer(FileTransfer x) {
+    if (x.state != XferState.done) return;
+    List list;
+    try {
+      final d = jsonDecode(db.getKv('xfer_done') ?? '[]');
+      list = d is List ? List.of(d) : <dynamic>[];
+    } catch (_) {
+      list = <dynamic>[];
+    }
+    list.removeWhere((m) => m is Map && m['id'] == x.id);
+    list.insert(0, {
+      'id': x.id,
+      'peer': x.peer,
+      'name': x.media.name,
+      'mime': x.media.mime,
+      'size': x.media.size,
+      'hash': x.media.hash,
+      'key': x.media.key,
+      'dir': x.dir.name,
+      'started': x.started,
+    });
+    if (list.length > 40) list = list.sublist(0, 40);
+    db.setKv('xfer_done', jsonEncode(list));
+  }
 
   List<Item> hosted(String author) =>
       items(Scope.files(author))
@@ -3404,19 +4380,33 @@ class Engine {
     return out;
   }
 
+  String lockHash(String password) {
+    final b = sha256(utf8.encode(password));
+    return b.map((e) => e.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   Future<Item> hostFile(
     MediaRef ref, {
     String note = '',
     String folder = '',
     List<String> tags = const [],
     bool keep = true,
+    String lock = '',
+    List<String> audience = const [],
   }) async {
     final cleanTags = HostMeta.cleanTags(tags);
+    final who = audience
+        .where((id) => id.trim().isNotEmpty)
+        .map((id) => id.trim())
+        .toSet()
+        .toList();
     final e = await _publish(K.host, Scope.files(me.id), {
       'media': [ref.toJson()],
       if (note.trim().isNotEmpty) 'note': note.trim(),
       if (folder.trim().isNotEmpty) 'folder': folder.trim(),
       if (cleanTags.isNotEmpty) 'tags': cleanTags,
+      if (lock.isNotEmpty) 'lock': lock,
+      if (who.isNotEmpty) 'for': who,
     }, keep: keep);
     _emit({Ch.files, Scope.files(me.id)});
     return Item(e, owned: true, kept: false);
@@ -3429,7 +4419,15 @@ class Engine {
   Future<File?> takeHosted(
     Item item, {
     void Function(int done, int total)? onProgress,
+    String? password,
   }) async {
+    final meta = HostMeta.of(item);
+    if (meta.audience.isNotEmpty &&
+        item.author != me.id &&
+        !meta.audience.contains(me.id))
+      return null;
+    if (meta.lock.isNotEmpty && lockHash(password ?? '') != meta.lock)
+      return null;
     final refs = MediaRef.listFrom(item.body['media']);
     if (refs.isEmpty) return null;
     final f = await media.open(
@@ -3446,7 +4444,10 @@ class Engine {
 
   /// How many people downloaded a hosted file, as far as this device knows.
   /// Exact for your own files.
-  int hostDownloads(Item item) => (fold(_mutationsFor([item.id]), {item.id: item}).views[item.id] ?? const {}).length;
+  int hostDownloads(Item item) =>
+      (fold(_mutationsFor([item.id]), {item.id: item}).views[item.id] ??
+              const {})
+          .length;
 
   Future<GroupInfo> createGroup(String name, List<String> memberIds) async {
     final g = GroupInfo(
@@ -3515,7 +4516,9 @@ class Engine {
       // returns, and the fan-out closure keeps this copy of the group.
       await _publish(K.group, Scope.gmeta(id), next.metaJson(), keep: true);
     }
-    if (g.owner == me.id && removed.isNotEmpty && next.members.contains(me.id)) {
+    if (g.owner == me.id &&
+        removed.isNotEmpty &&
+        next.members.contains(me.id)) {
       await _rotateGroupKey(db.group(id) ?? next);
     }
     _emit({Ch.groups, Ch.chats});
@@ -3575,9 +4578,16 @@ class Engine {
   /// Starts queued downloads while fewer than the configured number run.
   void _pumpInbound() {
     final limit = _settings.xferParallel.clamp(1, 8);
-    var running = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.active).length;
-    final waiting = _xfers.values.where((x) => x.dir == XferDir.inbound && x.state == XferState.queued).toList()
-      ..sort((a, b) => a.started.compareTo(b.started));
+    var running = _xfers.values
+        .where((x) => x.dir == XferDir.inbound && x.state == XferState.active)
+        .length;
+    final waiting =
+        _xfers.values
+            .where(
+              (x) => x.dir == XferDir.inbound && x.state == XferState.queued,
+            )
+            .toList()
+          ..sort((a, b) => a.started.compareTo(b.started));
     for (final x in waiting) {
       if (running >= limit) break;
       running++;
@@ -3591,7 +4601,8 @@ class Engine {
   /// offer that never reached them is sent again.
   Future<void> retryTransfer(String id) async {
     final x = _xfers[id];
-    if (x == null || !{XferState.failed, XferState.cancelled}.contains(x.state)) return;
+    if (x == null || !{XferState.failed, XferState.cancelled}.contains(x.state))
+      return;
     x.error = null;
     x.done = 0;
     if (x.dir == XferDir.inbound) {
@@ -3601,7 +4612,12 @@ class Engine {
     }
     x.state = XferState.offer;
     _emit({Ch.xfers});
-    final ok = await _send(x.peer, {'t': 'xfer', 'op': 'offer', 'id': x.id, 'media': x.media.toJson()});
+    final ok = await _send(x.peer, {
+      't': 'xfer',
+      'op': 'offer',
+      'id': x.id,
+      'media': x.media.toJson(),
+    });
     if (!ok && x.state == XferState.offer) {
       x.state = XferState.failed;
       x.error = 'could not reach them';
@@ -3654,7 +4670,8 @@ class Engine {
             ts: nowMs(),
           ),
         );
-        final auto = _settings.xferAutoAccept &&
+        final auto =
+            _settings.xferAutoAccept &&
             (db.peer(from)?.iFollow ?? false) &&
             media.size <= _settings.xferAutoMaxMb * 1024 * 1024;
         if (auto) {
@@ -3675,23 +4692,30 @@ class Engine {
       case 'accept':
         final x = _xfers[id];
         if (x == null || x.peer != from || x.dir != XferDir.out) return;
-        if (x.state == XferState.cancelled || x.state == XferState.declined) return;
+        if (x.state == XferState.cancelled || x.state == XferState.declined)
+          return;
         x.state = XferState.active;
         _emit({Ch.xfers});
       case 'prog':
         final x = _xfers[id];
         if (x == null || x.peer != from) return;
-        if (x.state == XferState.cancelled || x.state == XferState.declined) return;
+        if (x.state == XferState.cancelled || x.state == XferState.declined)
+          return;
         x.bump((m['done'] as num?)?.toInt() ?? x.done);
         _peerBps[x.peer] = x.bps;
-        if (x.done >= x.total && x.total > 0) x.state = XferState.done;
+        if (x.done >= x.total && x.total > 0) {
+          x.state = XferState.done;
+          _keepTransfer(x);
+        }
         _emit({Ch.xfers, Ch.alerts});
       case 'done':
         final x = _xfers[id];
         if (x == null || x.peer != from) return;
-        if (x.state == XferState.cancelled || x.state == XferState.declined) return;
+        if (x.state == XferState.cancelled || x.state == XferState.declined)
+          return;
         x.done = x.total;
         x.state = XferState.done;
+        _keepTransfer(x);
         _emit({Ch.xfers});
       case 'fail':
         final x = _xfers[id];
@@ -3736,10 +4760,16 @@ class Engine {
         if (file == null) {
           x.state = XferState.failed;
           x.error = 'unreachable';
-          await _send(x.peer, {'t': 'xfer', 'op': 'fail', 'id': x.id, 'error': x.error});
+          await _send(x.peer, {
+            't': 'xfer',
+            'op': 'fail',
+            'id': x.id,
+            'error': x.error,
+          });
         } else {
           x.done = x.total;
           x.state = XferState.done;
+          _keepTransfer(x);
           await _send(x.peer, {'t': 'xfer', 'op': 'done', 'id': x.id});
         }
       }
@@ -3747,7 +4777,12 @@ class Engine {
       if (x.state != XferState.cancelled) {
         x.state = XferState.failed;
         x.error = '$e';
-        await _send(x.peer, {'t': 'xfer', 'op': 'fail', 'id': x.id, 'error': x.error});
+        await _send(x.peer, {
+          't': 'xfer',
+          'op': 'fail',
+          'id': x.id,
+          'error': x.error,
+        });
       }
     }
     if (x.state == XferState.cancelled &&
@@ -3788,15 +4823,17 @@ class Engine {
     String? category,
     int? at,
   }) {
-    _notes.add(OsNote(
-      id: id,
-      at: at ?? nowMs(),
-      category: category ?? _categoryOf(id, kind),
-      title: title,
-      body: body,
-      route: route,
-      scope: scope,
-    ));
+    _notes.add(
+      OsNote(
+        id: id,
+        at: at ?? nowMs(),
+        category: category ?? _categoryOf(id, kind),
+        title: title,
+        body: body,
+        route: route,
+        scope: scope,
+      ),
+    );
     if (kind != 'xfer') return;
     if (!_settings.systemNotify) return;
     if (scope != null && db.chat(scope)['muted'] == 1) return;
@@ -3834,8 +4871,12 @@ class Engine {
   bool mentionsMe(String text) {
     if (!text.contains('@')) return false;
     final lower = text.toLowerCase();
-    final names = {myProfile.name.trim().toLowerCase(), alias(me.id)}..remove('');
-    return names.any((n) => lower.contains('@$n') || lower.contains('@${n.replaceAll(' ', '')}'));
+    final names = {myProfile.name.trim().toLowerCase(), alias(me.id)}
+      ..remove('');
+    return names.any(
+      (n) =>
+          lower.contains('@$n') || lower.contains('@${n.replaceAll(' ', '')}'),
+    );
   }
 
   int peerBps(String id) => _peerBps[id] ?? 0;
@@ -3877,14 +4918,20 @@ class Engine {
   Set<String> _chanSubs() {
     try {
       final raw = db.getKv('chansubs');
-      return raw == null ? <String>{} : {for (final x in jsonDecode(raw) as List) if (x is String) x};
+      return raw == null
+          ? <String>{}
+          : {
+              for (final x in jsonDecode(raw) as List)
+                if (x is String) x,
+            };
     } catch (_) {
       return <String>{};
     }
   }
 
   /// Your own channels count as subscribed.
-  bool isSubscribed(String owner, String channelId) => owner == me.id || _chanSubs().contains('$owner/$channelId');
+  bool isSubscribed(String owner, String channelId) =>
+      owner == me.id || _chanSubs().contains('$owner/$channelId');
 
   /// Subscribing follows the owner (their posts travel on their feed topic)
   /// and sends them a signed subscription they can count.
@@ -3892,8 +4939,13 @@ class Engine {
     final subs = _chanSubs();
     on ? subs.add('${c.owner}/${c.id}') : subs.remove('${c.owner}/${c.id}');
     db.setKv('chansubs', jsonEncode(subs.toList()));
-    if (on && !(db.peer(c.owner)?.iFollow ?? false)) await follow(c.owner, true);
-    await _publish(K.like, Scope.post(c.owner, c.id), {'target': c.id, 'on': on, 'sub': true}, keep: true);
+    if (on && !(db.peer(c.owner)?.iFollow ?? false))
+      await follow(c.owner, true);
+    await _publish(K.like, Scope.post(c.owner, c.id), {
+      'target': c.id,
+      'on': on,
+      'sub': true,
+    }, keep: true);
     _emit({Ch.channels, Ch.chats});
   }
 
@@ -3906,21 +4958,32 @@ class Engine {
       final prev = latest[m.author];
       if (prev == null || m.ts >= prev.ts) latest[m.author] = m;
     }
-    return {for (final x in latest.entries) if (x.value.body['on'] != false) x.key};
+    return {
+      for (final x in latest.entries)
+        if (x.value.body['on'] != false) x.key,
+    };
   }
 
   /// Owner-controlled state: pinned post and whether comments are open.
   ({String? pinned, bool comments}) channelState(Bcast c) {
     Item? last;
     for (final m in _mutationsFor([c.id])) {
-      if (m.e.kind != K.edit || m.author != c.owner || m.body['chan'] != true) continue;
+      if (m.e.kind != K.edit || m.author != c.owner || m.body['chan'] != true)
+        continue;
       if (last == null || m.ts >= last.ts) last = m;
     }
     final b = last?.body ?? const <String, dynamic>{};
-    return (pinned: b['pin'] is String ? b['pin'] as String : null, comments: b['comments'] != false);
+    return (
+      pinned: b['pin'] is String ? b['pin'] as String : null,
+      comments: b['comments'] != false,
+    );
   }
 
-  Future<void> setChannelState(Bcast c, {String? pinned, required bool comments}) async {
+  Future<void> setChannelState(
+    Bcast c, {
+    String? pinned,
+    required bool comments,
+  }) async {
     if (c.owner != me.id) throw StateError('Only the owner changes a channel');
     await _publish(K.edit, Scope.feed(me.id), {
       'target': c.id,
@@ -4029,7 +5092,8 @@ class Engine {
         if (g.value is! Map) continue;
         final peers = <String, int>{
           for (final p in (g.value as Map).entries)
-            if (p.value is num && (p.value as num) > cutoff) '${p.key}': (p.value as num).toInt(),
+            if (p.value is num && (p.value as num) > cutoff)
+              '${p.key}': (p.value as num).toInt(),
         };
         if (peers.isNotEmpty) _outgoingInvites['${g.key}'] = peers;
       }
@@ -4042,7 +5106,8 @@ class Engine {
   }
 
   /// People invited to [groupId] who have not answered yet.
-  List<String> pendingInvites(String groupId) => (_outgoingInvites[groupId] ?? const {}).keys.toList();
+  List<String> pendingInvites(String groupId) =>
+      (_outgoingInvites[groupId] ?? const {}).keys.toList();
 
   /// Withdraws an invitation; a later acceptance is ignored.
   void revokeGroupInvite(String groupId, String peer) {

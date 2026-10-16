@@ -120,6 +120,15 @@ class Db {
         PRAGMA user_version = 6;
       ''');
     }
+    if (v < 7) {
+      _db.execute('''
+        CREATE TABLE IF NOT EXISTS coin_tx(
+          hash TEXT PRIMARY KEY, account TEXT NOT NULL, seq INTEGER NOT NULL,
+          to_id TEXT NOT NULL, amount INTEGER NOT NULL, data TEXT NOT NULL, ts INTEGER NOT NULL);
+        CREATE INDEX IF NOT EXISTS coin_tx_account ON coin_tx(account, seq);
+        PRAGMA user_version = 7;
+      ''');
+    }
   }
 
   /// Copies every committed page into [destPath]. A plain file copy of a WAL
@@ -758,6 +767,23 @@ class Db {
     deleteOutbox(e.id);
   });
 
+  /// Replaces a local-only placeholder with real recipient jobs.
+  /// Existing jobs for those peers are left alone.
+  void enrollDeliveries(String id, Iterable<String> peers) => transaction(() {
+    final list = peers.toSet();
+    if (list.isEmpty) return;
+    _db.execute(
+      "DELETE FROM message_delivery WHERE id = ? AND state = 'saved'",
+      [id],
+    );
+    for (final peer in list) {
+      _db.execute(
+        "INSERT OR IGNORE INTO message_delivery(id, peer, state, next_at) VALUES(?, ?, 'queued', ?)",
+        [id, peer, nowMs()],
+      );
+    }
+  });
+
   RecipientDelivery? _delivery(Row r) {
     try {
       final name = r['state'];
@@ -910,7 +936,7 @@ class Db {
   /// from user input.
   static const explorable = [
     'items', 'peers', 'grants', 'spaces', 'groups', 'files', 'bookmarks', 'receipts',
-    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'kv',
+    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'coin_tx', 'kv',
   ];
 
   Map<String, int> tableCounts() => {
@@ -1040,4 +1066,28 @@ class Db {
 
   List<String> ledgerPeers() =>
       _db.select('SELECT DISTINCT peer FROM ledger').map((r) => r['peer'] as String).toList();
+
+  // ---------- Mentos coin ledger ----------
+
+  void putCoinTx(String hash, String account, int seq, String to, int amount, String data, int ts) =>
+      _db.execute(
+        'INSERT OR IGNORE INTO coin_tx(hash, account, seq, to_id, amount, data, ts) VALUES(?, ?, ?, ?, ?, ?, ?)',
+        [hash, account, seq, to, amount, data, ts],
+      );
+
+  String? coinTxByHash(String hash) {
+    final rows = _db.select('SELECT data FROM coin_tx WHERE hash = ?', [hash]);
+    return rows.isEmpty ? null : rows.first['data'] as String;
+  }
+
+  String? coinMint(String account) {
+    final rows = _db.select('SELECT data FROM coin_tx WHERE account = ? AND seq = 0', [account]);
+    return rows.isEmpty ? null : rows.first['data'] as String;
+  }
+
+  int coinCount(String account) =>
+      _db.select('SELECT COUNT(*) c FROM coin_tx WHERE account = ?', [account]).first['c'] as int;
+
+  List<String> coinTxRows() =>
+      _db.select('SELECT data FROM coin_tx ORDER BY ts ASC, hash ASC').map((r) => r['data'] as String).toList();
 }

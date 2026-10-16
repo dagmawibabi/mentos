@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/format.dart';
@@ -178,8 +177,8 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       if (mounted) toast(context, 'This file is no longer on this phone.');
       return;
     }
-    final r = await OpenFilex.open(out.path, type: f.mime);
-    if (r.type != ResultType.done) await SharePlus.instance.share(ShareParams(files: [XFile(out.path)]));
+    if (!mounted) return;
+    await showLocalFile(context, out, name: f.name, mime: f.mime);
   }
 
   void _menu(BuildContext context, StoredFile f) {

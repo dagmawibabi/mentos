@@ -116,6 +116,9 @@ abstract class Transport {
 
   Stream<NetEvent> get events;
 
+  /// Remembers a relay URL to attach when dialing a peer id.
+  void setPreferredRelay(String? url) {}
+
   /// Sends to a peer by id, dialing if needed. Returns false if unreachable.
   Future<bool> send(String peer, Uint8List data);
 
@@ -208,6 +211,9 @@ class OfflineTransport implements Transport {
 
   @override
   Future<void> stop() async {}
+
+  @override
+  void setPreferredRelay(String? url) {}
 
   @override
   Future<bool> send(String peer, Uint8List data) async => false;

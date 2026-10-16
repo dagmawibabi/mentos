@@ -28,15 +28,22 @@ class NetworkScreen extends ConsumerWidget {
     final tiers = e.tierCounts();
     final keptBy = e.keptByAuthor();
     final online = e.onlinePeers.toList();
-    final links = {for (final l in status?.links ?? const <LinkInfo>[]) l.peer: l};
+    final links = {
+      for (final l in status?.links ?? const <LinkInfo>[]) l.peer: l,
+    };
 
     final keepers = <String, List<Grant>>{};
     for (final g in grants.where((g) => g.dir == GrantDir.out)) {
       keepers.putIfAbsent(g.peer, () => []).add(g);
     }
     final preserved = e.people().where((x) => x.preserve).toList();
-    final custody = grants.where((g) => g.dir == GrantDir.inbound && g.state == GrantState.active).toList();
-    final spacesKept = e.spaces().where((s) => s.preserve && s.archive).toList();
+    final custody = grants
+        .where((g) => g.dir == GrantDir.inbound && g.state == GrantState.active)
+        .toList();
+    final spacesKept = e
+        .spaces()
+        .where((s) => s.preserve && s.archive)
+        .toList();
 
     final running = !e.held && (status?.running ?? false);
     final busy = e.connecting;
@@ -49,19 +56,40 @@ class NetworkScreen extends ConsumerWidget {
             Container(
               width: 8,
               height: 8,
-              decoration: BoxDecoration(shape: BoxShape.circle, color: running ? p.accent : p.danger),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: running ? p.accent : p.danger,
+              ),
             ),
             const SizedBox(width: 8),
-            Text(running ? 'Online' : 'Offline', style: Txt.bodyStrong(running ? p.accent : p.ink)),
+            Text(
+              running ? 'Online' : 'Offline',
+              style: Txt.bodyStrong(running ? p.accent : p.ink),
+            ),
           ],
         ),
         actions: [
-          IconBtn(Icons.data_object_rounded, tooltip: 'Data explorer', onTap: () => context.push('/data')),
-          IconBtn(Icons.monitor_heart_outlined, tooltip: 'Diagnostics', onTap: () => context.push('/diagnostics')),
-          IconBtn(Icons.shield_outlined, tooltip: 'Privacy', onTap: () => context.push('/privacy')),
-          IconBtn(Icons.hub_outlined, tooltip: 'Iroh network', onTap: () {
-            Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const IrohNetworkPage()));
-          }),
+          IconBtn(
+            Icons.monitor_heart_outlined,
+            tooltip: 'Diagnostics',
+            onTap: () => context.push('/diagnostics'),
+          ),
+          IconBtn(
+            Icons.shield_outlined,
+            tooltip: 'Privacy',
+            onTap: () => context.push('/privacy'),
+          ),
+          IconBtn(
+            Icons.hub_outlined,
+            tooltip: 'Iroh network',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const IrohNetworkPage(),
+                ),
+              );
+            },
+          ),
           TextButton(
             style: TextButton.styleFrom(
               visualDensity: VisualDensity.compact,
@@ -69,8 +97,16 @@ class NetworkScreen extends ConsumerWidget {
               minimumSize: Size.zero,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            onPressed: busy ? null : (running ? e.disconnectNode : e.connectNode),
-            child: Text(busy ? 'Connecting' : running ? 'Disconnect' : 'Connect'),
+            onPressed: busy
+                ? null
+                : (running ? e.disconnectNode : e.connectNode),
+            child: Text(
+              busy
+                  ? 'Connecting'
+                  : running
+                  ? 'Disconnect'
+                  : 'Connect',
+            ),
           ),
           const SizedBox(width: 8),
         ],
@@ -90,21 +126,100 @@ class NetworkScreen extends ConsumerWidget {
               running: status?.running ?? false,
             ),
             _NodeCard(status: status, id: e.me.id),
+            SectionLabel('Relays'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Space.gutter,
+                0,
+                Space.gutter,
+                Space.sm,
+              ),
+              child: Text(
+                e.preferredRelay == null
+                    ? 'Mentos picks a relay. Choose one to pin dials to it.'
+                    : 'Pinned to ${e.preferredRelay}',
+                style: Txt.small(p.muted),
+              ),
+            ),
+            for (final relay in <String>{
+              if (status?.relayUrl != null) status!.relayUrl!,
+              ...?status?.relays,
+            })
+              ListTile(
+                title: Text(relay, style: Txt.mono(p.ink, size: 12)),
+                trailing: e.preferredRelay == relay
+                    ? Icon(Icons.check_rounded, color: p.accent)
+                    : null,
+                onTap: () {
+                  final clear = e.preferredRelay == relay;
+                  e.preferRelay(clear ? null : relay);
+                  toast(context, clear ? 'Relay cleared' : 'Using this relay');
+                },
+              ),
+            RowTile(
+              icon: Icons.add_link_rounded,
+              title: 'Use another relay',
+              onTap: () async {
+                final url = await prompt(
+                  context,
+                  title: 'Relay',
+                  body: 'New connections dial this relay. Paste the full address.',
+                  hint: 'https://',
+                  action: 'Use relay',
+                  maxLength: 200,
+                  allowEmpty: false,
+                  keyboard: TextInputType.url,
+                  capitalization: TextCapitalization.none,
+                  validate: (v) {
+                    final t = v.trim();
+                    final u = Uri.tryParse(t);
+                    if (u == null ||
+                        (u.scheme != 'https' && u.scheme != 'http') ||
+                        u.host.isEmpty) {
+                      return 'Start with https:// and a host';
+                    }
+                    return null;
+                  },
+                );
+                if (url == null || url.trim().isEmpty) return;
+                e.preferRelay(url.trim());
+              },
+            ),
             SectionLabel('Where data lives on this phone'),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
               child: Row(
                 children: [
-                  _Tier(value: tiers.owned, label: 'yours', hint: 'created here', tag: Provenance.mine),
+                  _Tier(
+                    value: tiers.owned,
+                    label: 'yours',
+                    hint: 'created here',
+                    tag: Provenance.mine,
+                  ),
                   const SizedBox(width: Space.sm),
-                  _Tier(value: tiers.kept, label: 'kept', hint: 'others\' with consent', tag: Provenance.kept),
+                  _Tier(
+                    value: tiers.kept,
+                    label: 'kept',
+                    hint: 'others\' with consent',
+                    tag: Provenance.kept,
+                  ),
                   const SizedBox(width: Space.sm),
-                  _Tier(value: tiers.live, label: 'live', hint: 'in memory only', tag: Provenance.live),
+                  _Tier(
+                    value: tiers.live,
+                    label: 'live',
+                    hint: 'in memory only',
+                    tag: Provenance.live,
+                  ),
                 ],
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, 0),
+              padding: const EdgeInsets.fromLTRB(
+                Space.gutter,
+                Space.sm,
+                Space.gutter,
+                0,
+              ),
               child: Text(
                 'Live items vanish when their author goes offline. Kept items stay until the author revokes '
                 'consent or you stop keeping them.',
@@ -116,11 +231,13 @@ class NetworkScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const TabBar(tabs: [
-                    Tab(text: 'Connected now'),
-                    Tab(text: 'You keep'),
-                    Tab(text: 'Keep you'),
-                  ]),
+                  const TabBar(
+                    tabs: [
+                      Tab(text: 'Connected now'),
+                      Tab(text: 'You keep'),
+                      Tab(text: 'Keep you'),
+                    ],
+                  ),
                   SizedBox(
                     height: 320,
                     child: TabBarView(
@@ -128,9 +245,11 @@ class NetworkScreen extends ConsumerWidget {
                         ListView(
                           children: [
                             if (online.isEmpty)
-                              _Hint(status?.running ?? false
-                                  ? 'No one reachable right now. Contacts connect automatically when they come online.'
-                                  : 'Your node isn\'t running, so nobody can reach you.')
+                              _Hint(
+                                status?.running ?? false
+                                    ? 'No one reachable right now. Contacts connect automatically when they come online.'
+                                    : 'Your node isn\'t running, so nobody can reach you.',
+                              )
                             else
                               for (final id in online)
                                 _PeerRow(
@@ -145,33 +264,50 @@ class NetworkScreen extends ConsumerWidget {
                         ),
                         ListView(
                           children: [
-                            if (custody.isEmpty && preserved.isEmpty && spacesKept.isEmpty)
+                            if (custody.isEmpty &&
+                                preserved.isEmpty &&
+                                spacesKept.isEmpty)
                               _Hint('Nothing from anyone else is stored here.')
                             else ...[
                               for (final g in custody)
                                 _PeerRow(
                                   id: g.peer,
-                                  subtitle: '${_scopeLabel(g.scope, e.me.id)} · ${keptBy[g.peer] ?? 0} items',
+                                  subtitle:
+                                      '${_scopeLabel(g.scope, e.me.id)} · ${keptBy[g.peer] ?? 0} items',
                                   action: TextButton(
                                     onPressed: () => e.dropTheirs(g.scope),
-                                    child: Text('Stop', style: Txt.small(p.danger)),
+                                    child: Text(
+                                      'Stop',
+                                      style: Txt.small(p.danger),
+                                    ),
                                   ),
                                 ),
                               for (final x in preserved)
                                 _PeerRow(
                                   id: x.id,
-                                  subtitle: 'public posts · ${keptBy[x.id] ?? 0} items',
+                                  subtitle:
+                                      'public posts · ${keptBy[x.id] ?? 0} items',
                                   action: TextButton(
                                     onPressed: () => e.setPreserve(x.id, false),
-                                    child: Text('Stop', style: Txt.small(p.danger)),
+                                    child: Text(
+                                      'Stop',
+                                      style: Txt.small(p.danger),
+                                    ),
                                   ),
                                 ),
                               for (final s in spacesKept)
                                 ListTile(
-                                  leading: Icon(Icons.grid_view_rounded, color: p.inkSoft),
+                                  leading: Icon(
+                                    Icons.grid_view_rounded,
+                                    color: p.inkSoft,
+                                  ),
                                   title: Text(s.name),
-                                  subtitle: Text('space history', style: Txt.mono(p.muted, size: 11)),
-                                  onTap: () => context.push('/s/${s.id}/settings'),
+                                  subtitle: Text(
+                                    'space history',
+                                    style: Txt.mono(p.muted, size: 11),
+                                  ),
+                                  onTap: () =>
+                                      context.push('/s/${s.id}/settings'),
                                 ),
                             ],
                           ],
@@ -179,14 +315,18 @@ class NetworkScreen extends ConsumerWidget {
                         ListView(
                           children: [
                             if (keepers.isEmpty)
-                              _Hint('No one. Everything you create exists only on this phone and is visible while you\'re online.')
+                              _Hint(
+                                'No one. Everything you create exists only on this phone and is visible while you\'re online.',
+                              )
                             else
                               for (final entry in keepers.entries)
                                 _PeerRow(
                                   id: entry.key,
                                   subtitle: entry.value
-                                      .map((g) =>
-                                          '${_scopeLabel(g.scope, e.me.id)}${g.state == GrantState.pending ? ' (waiting)' : ''}')
+                                      .map(
+                                        (g) =>
+                                            '${_scopeLabel(g.scope, e.me.id)}${g.state == GrantState.pending ? ' (waiting)' : ''}',
+                                      )
                                       .join(' · '),
                                 ),
                           ],
@@ -198,7 +338,9 @@ class NetworkScreen extends ConsumerWidget {
               ),
             ),
             SectionLabel('Topics'),
-            _Hint('${e.topicCount} gossip topics joined — one per space and per person you follow.'),
+            _Hint(
+              '${e.topicCount} gossip topics joined — one per space and per person you follow.',
+            ),
           ],
         ),
       ),
@@ -255,10 +397,16 @@ class _NodeCard extends StatelessWidget {
               Container(
                 width: 8,
                 height: 8,
-                decoration: BoxDecoration(shape: BoxShape.circle, color: running ? p.accent : p.danger),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: running ? p.accent : p.danger,
+                ),
               ),
               const SizedBox(width: 8),
-              Text(running ? 'Node online' : 'Node offline', style: Txt.bodyStrong(p.ink)),
+              Text(
+                running ? 'Node online' : 'Node offline',
+                style: Txt.bodyStrong(p.ink),
+              ),
               const Spacer(),
               Text(s?.engine ?? '—', style: Txt.mono(p.muted, size: 11)),
             ],
@@ -269,10 +417,21 @@ class _NodeCard extends StatelessWidget {
             'relays',
             s == null || s.relays.isEmpty
                 ? (s?.relayUrl ?? (running ? 'searching n0 relays…' : '—'))
-                : s.relays.map((u) => u.replaceAll(RegExp(r'/$'), '').replaceAll(RegExp(r'\.$'), '')).join('\n'),
+                : s.relays
+                      .map(
+                        (u) => u
+                            .replaceAll(RegExp(r'/$'), '')
+                            .replaceAll(RegExp(r'\.$'), ''),
+                      )
+                      .join('\n'),
           ),
           _KV('home', s?.relayUrl ?? '—'),
-          _KV('addresses', s == null || s.directAddrs.isEmpty ? '—' : s.directAddrs.take(3).join('\n')),
+          _KV(
+            'addresses',
+            s == null || s.directAddrs.isEmpty
+                ? '—'
+                : s.directAddrs.take(3).join('\n'),
+          ),
           _KV('encryption', 'QUIC · TLS 1.3 · Ed25519'),
         ],
       ),
@@ -301,10 +460,15 @@ class _KV extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(width: 86, child: Text(k, style: Txt.mono(p.faint, size: 11))),
+            SizedBox(
+              width: 86,
+              child: Text(k, style: Txt.mono(p.faint, size: 11)),
+            ),
             Expanded(
               child: Text(
-                copy && v.length > 24 ? '${v.substring(0, 20)}…${v.substring(v.length - 8)}' : v,
+                copy && v.length > 24
+                    ? '${v.substring(0, 20)}…${v.substring(v.length - 8)}'
+                    : v,
                 style: Txt.mono(p.ink, size: 11.5),
               ),
             ),
@@ -317,7 +481,12 @@ class _KV extends StatelessWidget {
 }
 
 class _Tier extends StatelessWidget {
-  const _Tier({required this.value, required this.label, required this.hint, required this.tag});
+  const _Tier({
+    required this.value,
+    required this.label,
+    required this.hint,
+    required this.tag,
+  });
   final int value;
   final String label;
   final String hint;
@@ -348,7 +517,12 @@ class _Tier extends StatelessWidget {
 }
 
 class _PeerRow extends ConsumerWidget {
-  const _PeerRow({required this.id, required this.subtitle, this.action, this.live = false});
+  const _PeerRow({
+    required this.id,
+    required this.subtitle,
+    this.action,
+    this.live = false,
+  });
   final String id;
   final String subtitle;
   final Widget? action;
@@ -361,7 +535,10 @@ class _PeerRow extends ConsumerWidget {
     return ListTile(
       leading: Avatar(id: id, size: 36),
       title: Text(name),
-      subtitle: Text(subtitle, style: Txt.mono(live ? p.accent : p.muted, size: 11)),
+      subtitle: Text(
+        subtitle,
+        style: Txt.mono(live ? p.accent : p.muted, size: 11),
+      ),
       trailing: action,
       onTap: () => context.push('/node/$id'),
       onLongPress: () => showPeerTech(context, id),
@@ -375,7 +552,7 @@ class _Hint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: 4),
-        child: Text(text, style: Txt.small(context.pal.muted)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: 4),
+    child: Text(text, style: Txt.small(context.pal.muted)),
+  );
 }

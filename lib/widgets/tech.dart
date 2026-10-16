@@ -200,6 +200,19 @@ class _ScopeTechSheet extends ConsumerWidget {
     final link = peer == null ? null : status?.links.where((l) => l.peer == peer).firstOrNull;
     final space = spaceId == null ? null : e.space(spaceId!);
     final group = groupId == null ? null : e.group(groupId!);
+    final chat = e.db.chat(scope);
+    final ttl = chat['ttl'] as int? ?? 0;
+    final peerView = peer == null ? null : ref.watch(peerProvider(peer!)).value;
+    final online = peer == null ? false : (ref.watch(onlineProvider(peer!)).value ?? false);
+    final liveFrom = peer == null ? 0 : e.liveItemsFrom(peer!);
+    final keptAuthor = peer == null ? 0 : (e.keptByAuthor()[peer!] ?? 0);
+    final kind = switch (link?.kind) {
+      LinkKind.direct => 'direct QUIC',
+      LinkKind.relay => 'relayed QUIC',
+      LinkKind.mixed => 'direct + relay',
+      LinkKind.none => 'dialing',
+      null => online ? 'gossip neighbor' : 'offline',
+    };
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.lg),
@@ -208,22 +221,35 @@ class _ScopeTechSheet extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(peer == null ? 'Technical' : e.nameOf(peer!), style: Txt.title(p.ink)),
-            const SizedBox(height: Space.md),
+            if (peer != null) ...[
+              const SizedBox(height: 4),
+              Text(online ? 'reachable now' : 'not on the mesh right now', style: Txt.mono(online ? p.accent : p.muted, size: 11)),
+            ],
+            const SizedBox(height: Space.lg),
             TechRows([
               ('scope', scope, copy: true),
               ('kind', Scope.type(scope), copy: false),
               ('items', '$owned yours · $kept kept · $live live', copy: false),
+              ('pinned', chat['pinned'] == 1 ? 'yes' : 'no', copy: false),
+              ('muted', chat['muted'] == 1 ? 'yes' : 'no', copy: false),
+              ('disappear', ttl == 0 ? 'off' : '${ttl}s' , copy: false),
+              ('transport', status?.engine ?? '—', copy: false),
+              ('node', status?.nodeId ?? e.me.id, copy: true),
+              ('relay', e.preferredRelay ?? status?.relayUrl ?? 'none pinned', copy: true),
               if (peer != null) ('peer', peer!, copy: true),
+              if (peer != null) ('link', link == null ? (online ? kind : 'no live path') : kind, copy: false),
+              if (peer != null) ('rtt', link?.latencyMs == null ? '—' : '${link!.latencyMs} ms', copy: false),
+              if (peer != null) ('last seen', lastSeen(peerView?.lastSeen ?? 0), copy: false),
+              if (peer != null) ('last heard', e.lastHeardFrom(peer!) == 0 ? 'not this session' : timeAgo(e.lastHeardFrom(peer!)), copy: false),
+              if (peer != null) ('live items', '$liveFrom in memory here', copy: false),
+              if (peer != null) ('kept here', '$keptAuthor with consent', copy: false),
               if (peer != null)
-                (
-                  'link',
-                  link == null
-                      ? 'no live path'
-                      : '${link.kind.name}${link.latencyMs == null ? '' : ' · ${link.latencyMs} ms'}',
-                  copy: false,
-                ),
-              if (link != null)
-                ('rtt', link.latencyMs == null ? '—' : '${link.latencyMs} ms', copy: false),
+                ('follow', peerView?.iFollow == true ? 'you follow' : (peerView?.followsMe == true ? 'follows you' : 'not following'), copy: false),
+              if (peer != null) ('follows you', peerView?.followsMe == true ? 'yes' : 'no', copy: false),
+              if (peer != null) ('preserve', peerView?.preserve == true ? 'you keep their public posts' : 'off', copy: false),
+              if (peer != null) ('addr', peerView?.addr ?? '—', copy: peerView?.addr != null),
+              if (peer != null && peerView?.profile != null)
+                ('profile', 'signed ${timeAgo(peerView!.profile!.ts)} · ${peerView.profile!.discoverable ? 'discoverable' : 'not discoverable'}', copy: false),
               for (final path in link?.paths ?? const <RoutePath>[])
                 (
                   path.selected ? 'in use' : 'path',
@@ -231,18 +257,37 @@ class _ScopeTechSheet extends ConsumerWidget {
                   copy: true,
                 ),
               if (space != null) ('space id', space.id, copy: true),
+              if (space != null) ('space name', space.name, copy: false),
+              if (space != null) ('owner', space.owner, copy: true),
+              if (space != null) ('public', space.public ? 'discoverable' : 'invite only', copy: false),
               if (space != null) ('archive', space.archive ? 'members may keep' : 'authors only', copy: false),
               if (space != null) ('this phone', space.preserve ? 'keeping history' : 'live only', copy: false),
               if (group != null) ('group id', group.id, copy: true),
-              if (group != null) ('members', '${group.members.length}', copy: false),
+              if (group != null) ('owner', group.owner, copy: true),
+              if (group != null) ('members', '${{group.owner, ...group.members}.length}', copy: false),
               if (group != null) ('sealed', 'XChaCha20-Poly1305 + Ed25519', copy: false),
-              ('transport', status?.engine ?? '—', copy: false),
+              if (group != null)
+                for (final member in {group.owner, ...group.members})
+                  ('member', '${e.nameOf(member)} · ${e.isOnline(member) ? 'online' : 'offline'} · $member', copy: true),
             ]),
-            if (peer != null)
-              Text(
-                'A direct path is a QUIC link between these two phones. A relay path is an iroh relay forwarding ciphertext when NAT blocks a hole. Relays do not store the chat.',
-                style: Txt.mono(p.faint, size: 11),
+            Text(
+              peer != null
+                  ? 'A direct path is a QUIC link between these two phones. A relay path is an iroh relay forwarding ciphertext when NAT blocks a hole. Relays do not store the chat. The node page has the route, traffic, and ledger beside this.'
+                  : 'This record is what this phone holds for the conversation. Relays forward ciphertext and do not store it.',
+              style: Txt.mono(p.faint, size: 11),
+            ),
+            if (peer != null) ...[
+              const SizedBox(height: Space.lg),
+              Row(
+                children: [
+                  Expanded(child: OutlinedButton(onPressed: () => context.push('/node/$peer'), child: const Text('Details'))),
+                  const SizedBox(width: Space.sm),
+                  Expanded(child: OutlinedButton(onPressed: () => context.push('/u/$peer'), child: const Text('Profile'))),
+                  const SizedBox(width: Space.sm),
+                  Expanded(child: FilledButton(onPressed: () => context.push('/transfer/$peer'), child: const Text('Files'))),
+                ],
               ),
+            ],
           ],
         ),
       ),

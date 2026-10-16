@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -21,7 +22,17 @@ class SettingsScreen extends ConsumerWidget {
     final n = ref.read(settingsProvider.notifier);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: [
+          IconBtn(
+            Icons.help_outline_rounded,
+            tooltip: 'Help',
+            onTap: () => context.push('/help'),
+          ),
+          const SizedBox(width: 8),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.only(bottom: Space.xxl),
         children: [
@@ -30,8 +41,26 @@ class SettingsScreen extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
             child: Segmented<ThemeMode>(
               value: s.themeMode,
-              options: const {ThemeMode.system: 'System', ThemeMode.light: 'Light', ThemeMode.dark: 'Dark'},
+              options: const {
+                ThemeMode.system: 'System',
+                ThemeMode.light: 'Light',
+                ThemeMode.dark: 'Dark',
+              },
               onChanged: (v) => n.update((x) => x.copyWith(themeMode: v)),
+            ),
+          ),
+          const SizedBox(height: Space.sm),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+            child: Segmented<String>(
+              value: s.accent,
+              options: const {
+                'emerald': 'Emerald',
+                'blue': 'Blue',
+                'amber': 'Amber',
+                'ink': 'Ink',
+              },
+              onChanged: (v) => n.update((x) => x.copyWith(accent: v)),
             ),
           ),
           const SizedBox(height: Space.sm),
@@ -41,11 +70,28 @@ class SettingsScreen extends ConsumerWidget {
             value: s.reduceMotion,
             onChanged: (v) => n.update((x) => x.copyWith(reduceMotion: v)),
           ),
+          SectionLabel('Navigation'),
+          SwitchTile(
+            icon: Icons.view_agenda_outlined,
+            title: 'Feed tab',
+            subtitle: 'Show Feed in the bottom bar',
+            value: s.showFeedTab,
+            onChanged: (v) => n.update((x) => x.copyWith(showFeedTab: v)),
+          ),
+          SwitchTile(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'Wallet tab',
+            subtitle:
+                'Show Wallet in the bottom bar. Settings can still open it.',
+            value: s.showWalletTab,
+            onChanged: (v) => n.update((x) => x.copyWith(showWalletTab: v)),
+          ),
           SectionLabel('What others may keep'),
           SwitchTile(
             icon: Icons.article_outlined,
             title: 'Followers may keep my posts',
-            subtitle: 'Your posts stay visible while you\'re away, through followers who agree. '
+            subtitle:
+                'Your posts stay visible while you\'re away, through followers who agree. '
                 'Turning this off asks them to delete their copies.',
             value: s.keepPosts,
             onChanged: (v) => n.update((x) => x.copyWith(keepPosts: v)),
@@ -115,7 +161,9 @@ class SettingsScreen extends ConsumerWidget {
           RowTile(
             icon: Icons.notifications_outlined,
             title: 'Notifications',
-            subtitle: s.systemNotify ? 'Messages, mentions, invites and more' : 'Off',
+            subtitle: s.systemNotify
+                ? 'Messages, mentions, invites and more'
+                : 'Off',
             onTap: () => context.push('/notifications'),
           ),
           SwitchTile(
@@ -128,7 +176,9 @@ class SettingsScreen extends ConsumerWidget {
           RowTile(
             icon: Icons.lock_outline_rounded,
             title: s.lockHash.isEmpty ? 'App lock' : 'App lock is on',
-            subtitle: s.lockHash.isEmpty ? 'Ask for a PIN after you leave' : 'Relocks after ${s.lockAfter}s in the background',
+            subtitle: s.lockHash.isEmpty
+                ? 'Ask for a PIN after you leave'
+                : 'Relocks after ${s.lockAfter}s in the background',
             onTap: () => _pin(context, ref),
           ),
           if (s.lockHash.isNotEmpty) ...[
@@ -142,7 +192,9 @@ class SettingsScreen extends ConsumerWidget {
             RowTile(
               icon: Icons.timer_outlined,
               title: 'Lock after leaving',
-              subtitle: s.lockAfter == 0 ? 'Immediately' : '${s.lockAfter} seconds',
+              subtitle: s.lockAfter == 0
+                  ? 'Immediately'
+                  : '${s.lockAfter} seconds',
               onTap: () => _lockAfter(context, ref),
             ),
           ],
@@ -156,17 +208,35 @@ class SettingsScreen extends ConsumerWidget {
           RowTile(
             icon: Icons.sd_storage_outlined,
             title: 'File storage limit',
-            subtitle: s.quotaMb >= 1024 ? '${s.quotaMb ~/ 1024} GB' : '${s.quotaMb} MB',
+            subtitle: s.quotaMb >= 1024
+                ? '${s.quotaMb ~/ 1024} GB'
+                : '${s.quotaMb} MB',
             onTap: () => _quota(context, ref),
           ),
-          RowTile(icon: Icons.folder_outlined, title: 'Files on this phone', onTap: () => context.push('/files')),
+          SwitchTile(
+            icon: Icons.wifi_tethering_rounded,
+            title: 'Stay connected in the background',
+            subtitle: 'Keep the node running when Mentos is not on screen',
+            value: s.keepAlive,
+            onChanged: (v) => n.update((x) => x.copyWith(keepAlive: v)),
+          ),
+          RowTile(
+            icon: Icons.folder_outlined,
+            title: 'Hosted files',
+            subtitle: 'Files this phone is serving',
+            onTap: () => context.push('/files'),
+          ),
           RowTile(
             icon: Icons.data_object_rounded,
             title: 'Data explorer',
             subtitle: 'Browse, verify and export everything stored here',
             onTap: () => context.push('/data'),
           ),
-          RowTile(icon: Icons.hub_outlined, title: 'Network and custody', onTap: () => context.go('/network')),
+          RowTile(
+            icon: Icons.hub_outlined,
+            title: 'Network and custody',
+            onTap: () => context.go('/network'),
+          ),
           RowTile(
             icon: Icons.shield_outlined,
             title: 'Privacy and transports',
@@ -177,14 +247,34 @@ class SettingsScreen extends ConsumerWidget {
             },
             onTap: () => context.push('/privacy'),
           ),
-          RowTile(icon: Icons.monitor_heart_outlined, title: 'Network diagnostics', onTap: () => context.push('/diagnostics')),
-          RowTile(icon: Icons.block_rounded, title: 'Blocked people', onTap: () => context.push('/people?tab=3')),
+          RowTile(
+            icon: Icons.monitor_heart_outlined,
+            title: 'Network diagnostics',
+            onTap: () => context.push('/diagnostics'),
+          ),
+          RowTile(
+            icon: Icons.block_rounded,
+            title: 'Blocked people',
+            onTap: () => context.push('/people?tab=3'),
+          ),
           SectionLabel('Money'),
           RowTile(
             icon: Icons.account_balance_wallet_outlined,
             title: 'Wallet',
-            subtitle: 'Credits you and your contacts owe each other',
-            onTap: () => context.push('/wallet'),
+            subtitle: 'Mentos coins on the shared ledger',
+            onTap: () => context.go('/wallet'),
+          ),
+          RowTile(
+            icon: Icons.storefront_outlined,
+            title: 'Marketplace',
+            subtitle: 'Mentos for birr, plugins, ads, tasks',
+            onTap: () => context.push('/market'),
+          ),
+          RowTile(
+            icon: Icons.terminal_rounded,
+            title: 'Developer',
+            subtitle: s.devMode ? 'Local API is on' : 'Logs and the local API',
+            onTap: () => context.push('/dev'),
           ),
           SectionLabel('Identity'),
           RowTile(
@@ -196,7 +286,8 @@ class SettingsScreen extends ConsumerWidget {
           RowTile(
             icon: Icons.key_rounded,
             title: 'Recovery phrase',
-            subtitle: 'Restores this identity and the chats and files saved with it',
+            subtitle:
+                'Restores this identity and the chats and files saved with it',
             onTap: () => context.push('/backup'),
           ),
           RowTile(
@@ -204,19 +295,27 @@ class SettingsScreen extends ConsumerWidget {
             title: 'Erase identity and data',
             danger: true,
             onTap: () async {
-              final ok = await confirm(context,
-                  title: 'Erase everything?',
-                  body: 'Deletes your key, posts, messages and files from this phone. Copies others kept '
-                      'stay with them. Without your recovery phrase this can\'t be undone.',
-                  action: 'Erase',
-                  danger: true);
+              final ok = await confirm(
+                context,
+                title: 'Erase everything?',
+                body:
+                    'Deletes your key, posts, messages and files from this phone. Copies others kept '
+                    'stay with them. Without your recovery phrase this can\'t be undone.',
+                action: 'Erase',
+                danger: true,
+              );
               if (ok) await ref.read(sessionProvider.notifier).wipe();
             },
           ),
           const SizedBox(height: Space.xxl),
           Center(child: const MentosMark(size: 22)),
           const SizedBox(height: Space.sm),
-          Center(child: Text('Mentos 1.0 · peer-to-peer over iroh', style: Txt.mono(p.faint, size: 11))),
+          Center(
+            child: Text(
+              'Mentos 1.0 · peer-to-peer over iroh',
+              style: Txt.mono(p.faint, size: 11),
+            ),
+          ),
         ],
       ),
     );
@@ -234,14 +333,19 @@ class SettingsScreen extends ConsumerWidget {
             for (final o in options)
               ListTile(
                 title: Text(ttlLabel(o)),
-                trailing: o == s.defaultTtl ? Icon(Icons.check_rounded, color: ctx.pal.accent) : null,
+                trailing: o == s.defaultTtl
+                    ? Icon(Icons.check_rounded, color: ctx.pal.accent)
+                    : null,
                 onTap: () => Navigator.pop(ctx, o),
               ),
           ],
         ),
       ),
     );
-    if (v != null) ref.read(settingsProvider.notifier).update((x) => x.copyWith(defaultTtl: v));
+    if (v != null)
+      ref
+          .read(settingsProvider.notifier)
+          .update((x) => x.copyWith(defaultTtl: v));
   }
 
   Future<void> _quota(BuildContext context, WidgetRef ref) async {
@@ -256,14 +360,17 @@ class SettingsScreen extends ConsumerWidget {
             for (final o in options)
               ListTile(
                 title: Text(o >= 1024 ? '${o ~/ 1024} GB' : '$o MB'),
-                trailing: o == s.quotaMb ? Icon(Icons.check_rounded, color: ctx.pal.accent) : null,
+                trailing: o == s.quotaMb
+                    ? Icon(Icons.check_rounded, color: ctx.pal.accent)
+                    : null,
                 onTap: () => Navigator.pop(ctx, o),
               ),
           ],
         ),
       ),
     );
-    if (v != null) ref.read(settingsProvider.notifier).update((x) => x.copyWith(quotaMb: v));
+    if (v != null)
+      ref.read(settingsProvider.notifier).update((x) => x.copyWith(quotaMb: v));
   }
 
   Future<void> _lockAfter(BuildContext context, WidgetRef ref) async {
@@ -278,54 +385,148 @@ class SettingsScreen extends ConsumerWidget {
             for (final o in options)
               ListTile(
                 title: Text(o == 0 ? 'Immediately' : '$o seconds'),
-                trailing: o == s.lockAfter ? Icon(Icons.check_rounded, color: ctx.pal.accent) : null,
+                trailing: o == s.lockAfter
+                    ? Icon(Icons.check_rounded, color: ctx.pal.accent)
+                    : null,
                 onTap: () => Navigator.pop(ctx, o),
               ),
           ],
         ),
       ),
     );
-    if (v != null) ref.read(settingsProvider.notifier).update((x) => x.copyWith(lockAfter: v));
+    if (v != null)
+      ref
+          .read(settingsProvider.notifier)
+          .update((x) => x.copyWith(lockAfter: v));
   }
 
   Future<void> _pin(BuildContext context, WidgetRef ref) async {
-    final c = TextEditingController();
-    final pin = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('App PIN'),
-        content: TextField(
-          controller: c,
-          autofocus: true,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: '4 or more digits, empty to turn off'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, c.text.trim()), child: const Text('Save')),
-        ],
-      ),
+    final has = ref.read(settingsProvider).lockHash.isNotEmpty;
+    final pin = await showInputSheet<String>(
+      context,
+      (_) => _PinSheet(canClear: has),
     );
-    if (pin == null) return;
+    if (pin == null || !context.mounted) return;
     if (pin.isEmpty) {
-      ref.read(settingsProvider.notifier).update((x) => x.copyWith(lockHash: '', lockBio: false));
-      return;
-    }
-    if (pin.length < 4 || !RegExp(r'^\d+$').hasMatch(pin)) {
-      if (context.mounted) toast(context, 'Use at least 4 digits');
-      return;
-    }
-    if (!context.mounted) return;
-    final again = await prompt(context, title: 'Repeat the PIN', action: 'Save', maxLength: 32);
-    if (again?.trim() != pin) {
-      if (context.mounted) toast(context, 'PINs did not match');
+      ref
+          .read(settingsProvider.notifier)
+          .update((x) => x.copyWith(lockHash: '', lockBio: false));
       return;
     }
     final hash = await PinHash.create(pin);
-    ref.read(settingsProvider.notifier).update((x) => x.copyWith(
-          lockHash: hash,
-          lockAfter: x.lockAfter == 0 ? 60 : x.lockAfter,
-        ));
+    ref
+        .read(settingsProvider.notifier)
+        .update(
+          (x) => x.copyWith(
+            lockHash: hash,
+            lockAfter: x.lockAfter == 0 ? 60 : x.lockAfter,
+          ),
+        );
+  }
+}
+
+class _PinSheet extends StatefulWidget {
+  const _PinSheet({required this.canClear});
+  final bool canClear;
+
+  @override
+  State<_PinSheet> createState() => _PinSheetState();
+}
+
+class _PinSheetState extends State<_PinSheet> {
+  final _pin = TextEditingController();
+  final _again = TextEditingController();
+  bool _hide = true;
+
+  @override
+  void dispose() {
+    _pin.dispose();
+    _again.dispose();
+    super.dispose();
+  }
+
+  bool get _digits => RegExp(r'^\d{4,}$').hasMatch(_pin.text.trim());
+
+  bool get _ok => _digits && _pin.text.trim() == _again.text.trim();
+
+  String? get _error {
+    final a = _pin.text.trim();
+    final b = _again.text.trim();
+    if (b.isNotEmpty && a != b) return 'Those PINs do not match';
+    if (b.isNotEmpty && a.length < 4) return 'Use at least 4 digits';
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final error = _error;
+    return InputSheet(
+      title: 'App lock',
+      body: widget.canClear
+          ? 'A new PIN replaces the current one. Mentos asks for it after the app has been in the background.'
+          : 'Four or more digits. Mentos asks for it after the app has been in the background.',
+      action: 'Save PIN',
+      enabled: _ok,
+      onAction: () => Navigator.pop(context, _pin.text.trim()),
+      secondary: widget.canClear ? 'Turn off' : null,
+      secondaryDanger: true,
+      onSecondary: widget.canClear ? () => Navigator.pop(context, '') : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SheetLabel(
+            'PIN',
+            trailing: _pin.text.isEmpty ? null : '${_pin.text.length}',
+          ),
+          TextField(
+            controller: _pin,
+            autofocus: true,
+            obscureText: _hide,
+            keyboardType: TextInputType.number,
+            maxLength: 32,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: '4 or more digits',
+              counterText: '',
+              suffixIcon: IconButton(
+                tooltip: _hide ? 'Show' : 'Hide',
+                onPressed: () => setState(() => _hide = !_hide),
+                icon: Icon(
+                  _hide
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  size: 18,
+                  color: p.muted,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: Space.lg),
+          const SheetLabel('Repeat'),
+          TextField(
+            controller: _again,
+            obscureText: _hide,
+            keyboardType: TextInputType.number,
+            maxLength: 32,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            textInputAction: TextInputAction.done,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) {
+              if (_ok) Navigator.pop(context, _pin.text.trim());
+            },
+            decoration: const InputDecoration(
+              hintText: 'Same digits again',
+              counterText: '',
+            ),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 6),
+            Text(error, style: Txt.small(p.danger)),
+          ],
+        ],
+      ),
+    );
   }
 }

@@ -28,10 +28,14 @@ class MyProfileScreen extends ConsumerWidget {
     final e = ref.watch(maybeEngineProvider);
     if (e == null) return const SizedBox.shrink();
     final me = ref.watch(myProfileProvider).value ?? e.myProfile;
-    final posts = ref.watch(authorFeedProvider(e.me.id)).value ?? const <PostView>[];
+    final posts =
+        ref.watch(authorFeedProvider(e.me.id)).value ?? const <PostView>[];
     final people = ref.watch(peopleProvider).value ?? const <Peer>[];
     final grants = ref.watch(grantsProvider).value ?? const <Grant>[];
-    final keepers = grants.where((g) => g.dir == GrantDir.out && g.state == GrantState.active).map((g) => g.peer).toSet();
+    final keepers = grants
+        .where((g) => g.dir == GrantDir.out && g.state == GrantState.active)
+        .map((g) => g.peer)
+        .toSet();
 
     return DefaultTabController(
       length: 4,
@@ -39,10 +43,31 @@ class MyProfileScreen extends ConsumerWidget {
         appBar: AppBar(
           title: const Text('You'),
           actions: [
-            IconBtn(Icons.insights_outlined, tooltip: 'Insights', onTap: () => context.push('/insights')),
-            IconBtn(Icons.info_outline_rounded, tooltip: 'Technical', onTap: () => showPeerTech(context, e.me.id)),
-            IconBtn(Icons.qr_code_rounded, tooltip: 'My code', onTap: () => context.push('/connect')),
-            IconBtn(Icons.settings_outlined, tooltip: 'Settings', onTap: () => context.push('/settings')),
+            IconBtn(
+              Icons.insights_outlined,
+              tooltip: 'Insights',
+              onTap: () => context.push('/insights'),
+            ),
+            IconBtn(
+              Icons.data_object_rounded,
+              tooltip: 'Data explorer',
+              onTap: () => context.push('/data'),
+            ),
+            IconBtn(
+              Icons.info_outline_rounded,
+              tooltip: 'Technical',
+              onTap: () => showPeerTech(context, e.me.id),
+            ),
+            IconBtn(
+              Icons.qr_code_rounded,
+              tooltip: 'My code',
+              onTap: () => context.push('/connect'),
+            ),
+            IconBtn(
+              Icons.settings_outlined,
+              tooltip: 'Settings',
+              onTap: () => context.push('/settings'),
+            ),
             const SizedBox(width: 8),
           ],
         ),
@@ -55,13 +80,26 @@ class MyProfileScreen extends ConsumerWidget {
               onEdit: () => context.push('/edit-profile'),
               stats: [
                 (posts.length, 'posts', null),
-                (people.where((x) => x.iFollow).length, 'following', () => context.push('/people?tab=0')),
-                (people.where((x) => x.followsMe).length, 'followers', () => context.push('/people?tab=1')),
+                (
+                  people.where((x) => x.iFollow).length,
+                  'following',
+                  () => context.push('/people?tab=0'),
+                ),
+                (
+                  people.where((x) => x.followsMe).length,
+                  'followers',
+                  () => context.push('/people?tab=1'),
+                ),
                 (keepers.length, 'keep you', () => context.go('/network')),
               ],
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm),
+              padding: const EdgeInsets.fromLTRB(
+                Space.gutter,
+                0,
+                Space.gutter,
+                Space.sm,
+              ),
               child: Row(
                 children: [
                   Expanded(
@@ -73,16 +111,22 @@ class MyProfileScreen extends ConsumerWidget {
                       onPressed: () async {
                         try {
                           final n = await hostPickedFiles(context, e);
-                          if (n > 0 && context.mounted) toast(context, 'Hosting');
+                          if (n > 0 && context.mounted)
+                            toast(context, 'Hosting');
                         } catch (err) {
-                          if (context.mounted) toast(context, 'Could not host: $err');
+                          if (context.mounted)
+                            toast(context, 'Could not host: $err');
                         }
                       },
                       icon: const Icon(Icons.hub_outlined, size: 16),
-                      label: const Text('Host a file', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      label: const Text(
+                        'Host a file',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: Space.sm),
                   Expanded(
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
@@ -91,10 +135,14 @@ class MyProfileScreen extends ConsumerWidget {
                       ),
                       onPressed: () => context.push('/transfer'),
                       icon: const Icon(Icons.swap_horiz_rounded, size: 16),
-                      label: const Text('Transfer', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      label: const Text(
+                        'Transfer',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: Space.sm),
                   Expanded(
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
@@ -103,13 +151,24 @@ class MyProfileScreen extends ConsumerWidget {
                       ),
                       onPressed: () => context.push('/files'),
                       icon: const Icon(Icons.folder_outlined, size: 16),
-                      label: const Text('Files', maxLines: 1, overflow: TextOverflow.ellipsis),
+                      label: const Text(
+                        'Files',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-            const TabBar(tabs: [Tab(text: 'Posts'), Tab(text: 'Bookmarks'), Tab(text: 'Activity'), Tab(text: 'Hosted')]),
+            const TabBar(
+              tabs: [
+                Tab(text: 'Posts'),
+                Tab(text: 'Bookmarks'),
+                Tab(text: 'Activity'),
+                Tab(text: 'Hosted'),
+              ],
+            ),
             Expanded(
               child: TabBarView(
                 children: [
@@ -119,16 +178,26 @@ class MyProfileScreen extends ConsumerWidget {
                           title: 'Nothing posted yet',
                           body: 'Your posts are stored here and reach followers directly.',
                           compact: true,
-                          action: OutlinedButton(onPressed: () => context.push('/compose'), child: const Text('Write a post')),
+                          action: OutlinedButton(
+                            onPressed: () => context.push('/compose'),
+                            child: const Text('Write a post'),
+                          ),
                         )
-                      : ListView.separated(
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(
+                            0,
+                            Space.md,
+                            0,
+                            Space.xl,
+                          ),
                           itemCount: posts.length,
-                          separatorBuilder: (_, _) => const Hairline(),
                           itemBuilder: (_, i) => PostCard(post: posts[i]),
                         ),
                   const BookmarksScreen(embedded: true),
                   const ActivityScreen(embedded: true),
-                  ListView(children: [HostedList(author: e.me.id, compact: true)]),
+                  ListView(
+                    children: [HostedList(author: e.me.id, compact: true)],
+                  ),
                 ],
               ),
             ),
@@ -156,8 +225,15 @@ class ProfileScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         actions: [
-          IconBtn(Icons.info_outline_rounded, tooltip: 'Technical', onTap: () => showPeerTech(context, id)),
-          IconBtn(Icons.more_horiz_rounded, onTap: () => _menu(context, ref, peer)),
+          IconBtn(
+            Icons.info_outline_rounded,
+            tooltip: 'Technical',
+            onTap: () => showPeerTech(context, id),
+          ),
+          IconBtn(
+            Icons.more_horiz_rounded,
+            onTap: () => _menu(context, ref, peer),
+          ),
           const SizedBox(width: 8),
         ],
       ),
@@ -184,22 +260,33 @@ class ProfileScreen extends ConsumerWidget {
                     padding: const EdgeInsets.only(bottom: Space.sm),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('${peer.name} follows you', style: Txt.mono(p.accent, size: 11)),
+                      child: Text(
+                        '${peer.name} follows you',
+                        style: Txt.mono(p.accent, size: 11),
+                      ),
                     ),
                   ),
                 Row(
                   children: [
                     Expanded(
                       child: peer.iFollow
-                          ? OutlinedButton(onPressed: () => e.follow(id, false), child: const Text('Following'))
+                          ? OutlinedButton(
+                              onPressed: () => e.follow(id, false),
+                              child: const Text('Following'),
+                            )
                           : FilledButton(
                               onPressed: () => e.follow(id, true),
-                              child: Text(peer.followsMe ? 'Follow back' : 'Follow'),
+                              child: Text(
+                                peer.followsMe ? 'Follow back' : 'Follow',
+                              ),
                             ),
                     ),
                     const SizedBox(width: Space.sm),
                     Expanded(
-                      child: OutlinedButton(onPressed: () => context.push('/chat/$id'), child: const Text('Message')),
+                      child: OutlinedButton(
+                        onPressed: () => context.push('/chat/$id'),
+                        child: const Text('Message'),
+                      ),
                     ),
                   ],
                 ),
@@ -232,53 +319,88 @@ class ProfileScreen extends ConsumerWidget {
                 ),
                 child: Row(
                   children: [
-                    Icon(peer.preserve ? Icons.cloud_done_rounded : Icons.cloud_outlined,
-                        size: 18, color: peer.preserve ? p.accent : p.muted),
+                    Icon(
+                      peer.preserve
+                          ? Icons.cloud_done_rounded
+                          : Icons.cloud_outlined,
+                      size: 18,
+                      color: peer.preserve ? p.accent : p.muted,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Keep their posts', style: Txt.small(p.ink).copyWith(fontWeight: FontWeight.w600)),
+                          Text(
+                            'Keep their posts',
+                            style: Txt.small(p.ink)
+                                .copyWith(fontWeight: FontWeight.w600),
+                          ),
                           Text(
                             canPreserve
                                 ? (peer.preserve
-                                    ? 'Stored here and shown to others while ${peer.name} is away.'
-                                    : '${peer.name} allows followers to keep a copy.')
+                                      ? 'Stored here and shown to others while ${peer.name} is away.'
+                                      : '${peer.name} allows followers to keep a copy.')
                                 : '${peer.name} keeps their posts on their own phone only.',
                             style: Txt.small(p.muted).copyWith(fontSize: 12),
                           ),
                         ],
                       ),
                     ),
-                    Switch(value: peer.preserve, onChanged: canPreserve || peer.preserve ? (v) => e.setPreserve(id, v) : null),
+                    Switch(
+                      value: peer.preserve,
+                      onChanged: canPreserve || peer.preserve
+                          ? (v) => e.setPreserve(id, v)
+                          : null,
+                    ),
                   ],
                 ),
               ),
             ),
-          const SizedBox(height: Space.md),
-          const SizedBox(height: Space.md),
+          const SizedBox(height: Space.lg),
           DefaultTabController(
             length: 2,
             child: Column(
               children: [
-                const TabBar(tabs: [Tab(text: 'Posts'), Tab(text: 'Hosted')]),
+                const TabBar(
+                  tabs: [
+                    Tab(text: 'Posts'),
+                    Tab(text: 'Hosted'),
+                  ],
+                ),
                 SizedBox(
                   height: 520,
                   child: TabBarView(
                     children: [
                       posts.isEmpty
                           ? EmptyState(
-                              icon: online ? Icons.edit_note_rounded : Icons.cloud_off_rounded,
-                              title: online ? 'No posts yet' : 'Posts are on ${peer.name}\'s phone',
+                              icon: online
+                                  ? Icons.edit_note_rounded
+                                  : Icons.cloud_off_rounded,
+                              title: online
+                                  ? 'No posts yet'
+                                  : 'Posts are on ${peer.name}\'s phone',
                               compact: true,
                             )
-                          : ListView.separated(
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(
+                                0,
+                                Space.md,
+                                0,
+                                Space.xl,
+                              ),
                               itemCount: posts.length,
-                              separatorBuilder: (_, _) => const Hairline(),
                               itemBuilder: (_, i) => PostCard(post: posts[i]),
                             ),
-                      ListView(children: [HostedList(author: id, searchable: true, compact: true)]),
+                      ListView(
+                        children: [
+                          HostedList(
+                            author: id,
+                            searchable: true,
+                            compact: true,
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -291,7 +413,7 @@ class ProfileScreen extends ConsumerWidget {
   }
 
   Future<void> _sendFile(BuildContext context, Engine e, String id) async {
-    final picked = await pickFiles(e.media);
+    final picked = await pickFiles(e.media, context: context);
     if (picked.isEmpty || !context.mounted) return;
     try {
       for (final f in picked) {
@@ -307,28 +429,51 @@ class ProfileScreen extends ConsumerWidget {
   void _menu(BuildContext context, WidgetRef ref, Peer peer) {
     final e = ref.read(engineProvider);
     showActions(context, [
-      SheetAction(Icons.info_outline_rounded, 'Technical details', () => showPeerTech(context, peer.id)),
-      SheetAction(Icons.swap_horiz_rounded, 'File transfer', () => context.push('/transfer/${peer.id}')),
+      SheetAction(
+        Icons.info_outline_rounded,
+        'Technical details',
+        () => showPeerTech(context, peer.id),
+      ),
+      SheetAction(
+        Icons.swap_horiz_rounded,
+        'File transfer',
+        () => context.push('/transfer/${peer.id}'),
+      ),
       SheetAction(Icons.key_rounded, 'Copy key', () {
         Clipboard.setData(ClipboardData(text: peer.id));
         toast(context, 'Key copied');
       }),
       SheetAction(Icons.edit_outlined, 'Set nickname', () async {
-        final n = await prompt(context, title: 'Nickname', initial: peer.nickname ?? '', hint: 'Only you see this');
-        if (n != null) e.setNickname(peer.id, n.trim().isEmpty ? null : n.trim());
+        final n = await prompt(
+          context,
+          title: 'Nickname',
+          body: 'Only you see this. Clear it to use their name again.',
+          initial: peer.nickname ?? '',
+          hint: 'A name you will recognize',
+          selectAll: true,
+          capitalization: TextCapitalization.words,
+        );
+        if (n != null)
+          e.setNickname(peer.id, n.trim().isEmpty ? null : n.trim());
       }),
-      SheetAction(peer.blocked ? Icons.check_circle_outline_rounded : Icons.block_rounded,
-          peer.blocked ? 'Unblock' : 'Block', () async {
-        if (!peer.blocked) {
-          final ok = await confirm(context,
+      SheetAction(
+        peer.blocked ? Icons.check_circle_outline_rounded : Icons.block_rounded,
+        peer.blocked ? 'Unblock' : 'Block',
+        () async {
+          if (!peer.blocked) {
+            final ok = await confirm(
+              context,
               title: 'Block ${peer.name}?',
               body: 'You won\'t see their posts or messages, and anything of theirs kept here is deleted.',
               action: 'Block',
-              danger: true);
-          if (!ok) return;
-        }
-        await e.block(peer.id, !peer.blocked);
-      }, danger: !peer.blocked),
+              danger: true,
+            );
+            if (!ok) return;
+          }
+          await e.block(peer.id, !peer.blocked);
+        },
+        danger: !peer.blocked,
+      ),
     ]);
   }
 }

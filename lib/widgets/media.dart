@@ -152,9 +152,9 @@ class MediaGrid extends StatelessWidget {
         child: MediaLoader(
           media: m,
           item: item,
-          builder: (_, f) => m.isImage
+              builder: (_, f) => m.isImage
               ? Image.file(f, fit: BoxFit.cover, width: double.infinity, height: double.infinity, gaplessPlayback: true)
-              : _VideoThumb(media: m),
+              : _VideoThumb(file: f, media: m),
         ),
       );
       return GestureDetector(
@@ -208,28 +208,59 @@ class MediaGrid extends StatelessWidget {
   }
 }
 
-class _VideoThumb extends StatelessWidget {
-  const _VideoThumb({required this.media});
+class _VideoThumb extends StatefulWidget {
+  const _VideoThumb({required this.file, required this.media});
+  final File file;
   final MediaRef media;
 
   @override
+  State<_VideoThumb> createState() => _VideoThumbState();
+}
+
+class _VideoThumbState extends State<_VideoThumb> {
+  VideoPlayerController? _c;
+
+  @override
+  void initState() {
+    super.initState();
+    final c = VideoPlayerController.file(widget.file);
+    _c = c;
+    unawaited(c.initialize().then((_) async {
+      if (!mounted) return;
+      await c.seekTo(const Duration(milliseconds: 120));
+      await c.pause();
+      if (mounted) setState(() {});
+    }, onError: (_) {}));
+  }
+
+  @override
+  void dispose() {
+    _c?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final c = _c;
+    final ready = c != null && c.value.isInitialized;
     return Container(
       color: const Color(0xFF0D1110),
       child: Stack(
         alignment: Alignment.center,
+        fit: StackFit.expand,
         children: [
+          if (ready) FittedBox(fit: BoxFit.cover, child: SizedBox(width: c.value.size.width, height: c.value.size.height, child: VideoPlayer(c))),
           Container(
             width: 48,
             height: 48,
             decoration: const BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
             child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 30),
           ),
-          if (media.durationMs != null)
+          if (widget.media.durationMs != null)
             Positioned(
               right: 8,
               bottom: 8,
-              child: Text(duration(media.durationMs!), style: Txt.mono(Colors.white, size: 11)),
+              child: Text(duration(widget.media.durationMs!), style: Txt.mono(Colors.white, size: 11)),
             ),
         ],
       ),
@@ -315,6 +346,7 @@ class _VideoViewState extends State<VideoView> {
   late final VideoPlayerController _c = VideoPlayerController.file(widget.file);
   bool _ready = false;
   bool _playing = false;
+  bool _fast = false;
   int _shownSecond = -1;
 
   @override
@@ -350,6 +382,28 @@ class _VideoViewState extends State<VideoView> {
     final v = _c.value;
     return GestureDetector(
       onTap: () => v.isPlaying ? _c.pause() : _c.play(),
+      onDoubleTapDown: (d) {
+        final box = context.findRenderObject();
+        final width = box is RenderBox ? box.size.width : 1;
+        final delta = d.localPosition.dx < width / 2 ? -10 : 10;
+        var next = v.position + Duration(seconds: delta);
+        if (next < Duration.zero) next = Duration.zero;
+        if (next > v.duration) next = v.duration;
+        _c.seekTo(next);
+      },
+      onLongPressStart: (d) {
+        final box = context.findRenderObject();
+        final width = box is RenderBox ? box.size.width : 1;
+        final x = d.localPosition.dx;
+        if (x < width * .3 || x > width * .7) {
+          _c.setPlaybackSpeed(2);
+          setState(() => _fast = true);
+        }
+      },
+      onLongPressEnd: (_) {
+        _c.setPlaybackSpeed(1);
+        if (_fast) setState(() => _fast = false);
+      },
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -377,12 +431,67 @@ class _VideoViewState extends State<VideoView> {
                 ),
                 const SizedBox(width: 10),
                 Text(duration(v.duration.inMilliseconds), style: Txt.mono(Colors.white70, size: 11)),
+                IconButton(
+                  tooltip: 'Full screen',
+                  onPressed: () {
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => Scaffold(
+                        backgroundColor: Colors.black,
+                        body: SafeArea(child: VideoView(file: widget.file)),
+                      ),
+                    ));
+                  },
+                  icon: const Icon(Icons.fullscreen_rounded, color: Colors.white),
+                ),
+                IconButton(
+                  tooltip: 'Picture in picture',
+                  onPressed: () => _pip(context),
+                  icon: const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white),
+                ),
               ],
             ),
           ),
+          if (_fast)
+            const Positioned(
+              top: 24,
+              child: Text('2x', style: TextStyle(color: Colors.white, fontSize: 18)),
+            ),
         ],
       ),
     );
+  }
+
+  void _pip(BuildContext context) {
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
+    final file = widget.file;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) => Positioned(
+        right: 16,
+        bottom: 96,
+        width: 180,
+        height: 120,
+        child: Material(
+          color: Colors.black,
+          elevation: 8,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              VideoView(file: file),
+              Align(
+                alignment: Alignment.topRight,
+                child: IconButton(
+                  onPressed: () => entry.remove(),
+                  icon: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    overlay.insert(entry);
   }
 }
 
@@ -589,14 +698,8 @@ class _FileTileState extends ConsumerState<FileTile> {
       toast(context, 'File not reachable — the sender is offline.');
       return;
     }
-    try {
-      final r = await OpenFilex.open(f.path, type: widget.media.mime);
-      if (r.type != ResultType.done && mounted) {
-        await SharePlus.instance.share(ShareParams(files: [XFile(f.path)]));
-      }
-    } catch (_) {
-      if (mounted) toast(context, 'No app on this phone can open that file.');
-    }
+    if (!mounted) return;
+    await showLocalFile(context, f, name: widget.media.name, mime: widget.media.mime);
   }
 
   Future<void> _save() async {
@@ -646,6 +749,109 @@ class _FileTileState extends ConsumerState<FileTile> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+Future<void> showLocalFile(BuildContext context, File file, {required String name, required String mime}) {
+  return Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => FilePage(file: file, name: name, mime: mime),
+  ));
+}
+
+class FilePage extends StatefulWidget {
+  const FilePage({super.key, required this.file, required this.name, required this.mime});
+  final File file;
+  final String name;
+  final String mime;
+
+  @override
+  State<FilePage> createState() => _FilePageState();
+}
+
+class _FilePageState extends State<FilePage> {
+  String? _text;
+  final _player = AudioPlayer();
+
+  bool get _audio => widget.mime.startsWith('audio/') || widget.name.toLowerCase().endsWith('.mp3');
+  bool get _visual => widget.mime.startsWith('image/') || widget.mime.startsWith('video/');
+  bool get _textLike => widget.mime.startsWith('text/') ||
+      widget.mime.contains('json') ||
+      widget.name.toLowerCase().endsWith('.md') ||
+      widget.name.toLowerCase().endsWith('.csv');
+
+  @override
+  void initState() {
+    super.initState();
+    if (_textLike && widget.file.lengthSync() < 400 * 1024) {
+      _text = widget.file.readAsStringSync();
+    }
+    if (_audio) unawaited(_player.setFilePath(widget.file.path));
+  }
+
+  @override
+  void dispose() {
+    _player.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.name, overflow: TextOverflow.ellipsis)),
+      body: Column(
+        children: [
+          Expanded(
+            child: _visual && widget.mime.startsWith('image/')
+                ? InteractiveViewer(child: Image.file(widget.file))
+                : _visual
+                    ? VideoView(file: widget.file)
+                    : _audio
+                        ? Center(
+                            child: FilledButton.icon(
+                              onPressed: () => _player.playing ? _player.pause() : _player.play(),
+                              icon: const Icon(Icons.play_arrow_rounded),
+                              label: const Text('Play'),
+                            ),
+                          )
+                        : _text != null
+                            ? SingleChildScrollView(
+                                padding: const EdgeInsets.all(Space.gutter),
+                                child: SelectableText(_text!, style: Txt.mono(p.ink, size: 12)),
+                              )
+                            : Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(Space.gutter),
+                                  child: Text(
+                                    widget.mime.contains('pdf')
+                                        ? 'PDF is ready. Open it with the viewer on this device.'
+                                        : 'This file is on the phone. Open it outside Mentos if you need another app.',
+                                    textAlign: TextAlign.center,
+                                    style: Txt.body(p.muted),
+                                  ),
+                                ),
+                              ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(Space.gutter),
+            child: Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(onPressed: () => OpenFilex.open(widget.file.path, type: widget.mime), child: const Text('Open')),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => SharePlus.instance.share(ShareParams(files: [XFile(widget.file.path)])),
+                    child: const Text('Save'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

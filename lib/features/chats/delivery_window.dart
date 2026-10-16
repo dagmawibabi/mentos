@@ -41,7 +41,9 @@ class MessageDeliveryProgress extends StatelessWidget {
         .length;
     final caption = !message.mine ? 'Received' : message.delivery.label;
     final color = message.delivery == Delivery.failed ? p.danger : p.accent;
-    final count = message.mine ? deliveryMilestone(message.delivery) : 3;
+    // Incoming messages are already on this phone, so the meter is full.
+    // A fixed 3 of 4 looked like a transfer that had stalled.
+    final count = message.mine ? deliveryMilestone(message.delivery) : 4;
     return Semantics(
       button: true,
       label: '$caption. Open message delivery details',
@@ -387,10 +389,17 @@ class _MessageDeliveryWindowState extends State<MessageDeliveryWindow>
                             style: Txt.small(p.muted),
                           ),
                           const SizedBox(height: 6),
-                          Text(
-                            'This is the current connection, not a recorded hop-by-hop trace of this message.',
-                            style: Txt.mono(p.faint, size: 10.5),
-                          ),
+                          if (_message.hops.isEmpty)
+                            Text(
+                              'The hop-by-hop trace is saved the next time this message is sent or received.',
+                              style: Txt.mono(p.faint, size: 10.5),
+                            )
+                          else
+                            for (var i = 0; i < _message.hops.length; i++)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text('${i + 1}. ${_message.hops[i]}', style: Txt.mono(p.inkSoft, size: 11)),
+                              ),
                         ],
                       ),
                     ),

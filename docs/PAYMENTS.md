@@ -1,10 +1,12 @@
-# Payments: mutual credit
+# Payments
 
-Mentos does not have a coin. It has **mutual credit**: when Ada pays Bo 10 credits, Ada now owes Bo 10, or Bo owes Ada 10 less. Credits are promises between two people, recorded by both of them, and nothing else.
+Mentos coins are the only money in the app. They are one shared ledger. Every new identity is granted 5.00, signed by that identity's own key, and the grant can be written only once. Later payments are signed by the sender, chained to their previous payment, and gossiped across the peer network. Phones that have seen the same payments compute the same balances. If two payments spend the same coins, the ledger keeps the one with the lower hash. The code lives in `lib/net/pay/coin.dart`.
 
-This was chosen over a peer-maintained currency because a currency needs global agreement on who owns what. Without a server, that means a consensus system (a blockchain or a witness quorum) and a way to stop one person from running many fake nodes. Mutual credit needs neither: each balance concerns exactly two people, and both of them sign every change to it.
+Marketplace listings can name a birr price. That number is the amount two people agreed to settle with each other. The app moves Mentos on the ledger when a trade is confirmed. It does not send birr through a bank.
 
-## How it works
+The sections below describe mutual-credit code that is no longer part of the app. The wallet, profiles, and activity screens use Mentos only.
+
+## How the old credit code worked
 
 - Every pair of people has one **credit line**: a chain of entries kept only on their two phones. The line's id is a hash of both node ids.
 - An entry says: *line, sequence number, hash of the previous entry, payer, payee, amount, memo, time*. The amount is an integer in hundredths, up to one million credits.
