@@ -129,6 +129,26 @@ class Db {
         PRAGMA user_version = 7;
       ''');
     }
+    if (v < 8) {
+      _db.execute('''
+        CREATE TABLE IF NOT EXISTS coin_vote(
+          account TEXT NOT NULL, seq INTEGER NOT NULL, voter TEXT NOT NULL, hash TEXT NOT NULL,
+          data TEXT NOT NULL, PRIMARY KEY(account, seq, voter, hash));
+        CREATE TABLE IF NOT EXISTS mk_listing(
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, author TEXT NOT NULL, rev INTEGER NOT NULL,
+          ts INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS mk_listing_kind ON mk_listing(kind, ts);
+        CREATE INDEX IF NOT EXISTS mk_listing_author ON mk_listing(author);
+        CREATE TABLE IF NOT EXISTS mk_record(
+          id TEXT PRIMARY KEY, kind TEXT NOT NULL, ts INTEGER NOT NULL, data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS mk_record_kind ON mk_record(kind, ts);
+        CREATE TABLE IF NOT EXISTS mk_review(
+          id TEXT PRIMARY KEY, subject TEXT NOT NULL, author TEXT NOT NULL, ts INTEGER NOT NULL,
+          data TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS mk_review_subject ON mk_review(subject, ts);
+        PRAGMA user_version = 8;
+      ''');
+    }
   }
 
   /// Copies every committed page into [destPath]. A plain file copy of a WAL
@@ -686,6 +706,7 @@ class Db {
       'activity',
       'chats',
       'outbox',
+      'mk_record',
     ]) {
       _db.execute('DELETE FROM $t');
     }
@@ -948,7 +969,8 @@ class Db {
   /// from user input.
   static const explorable = [
     'items', 'peers', 'grants', 'spaces', 'groups', 'files', 'bookmarks', 'receipts',
-    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'coin_tx', 'kv',
+    'activity', 'chats', 'outbox', 'message_delivery', 'message_read', 'ledger', 'coin_tx', 'coin_vote',
+    'mk_listing', 'mk_record', 'mk_review', 'kv',
   ];
 
   Map<String, int> tableCounts() => {
@@ -1102,4 +1124,143 @@ class Db {
 
   List<String> coinTxRows() =>
       _db.select('SELECT data FROM coin_tx ORDER BY ts ASC, hash ASC').map((r) => r['data'] as String).toList();
+
+  List<String> coinTxRowsFor(String account) => _db
+      .select('SELECT data FROM coin_tx WHERE account = ? ORDER BY seq ASC', [account])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  /// account -> hashes of its stored payments, for sync summaries.
+  Map<String, List<String>> coinAccountHashes() {
+    final out = <String, List<String>>{};
+    for (final r in _db.select('SELECT account, hash FROM coin_tx')) {
+      (out[r['account'] as String] ??= []).add(r['hash'] as String);
+    }
+    return out;
+  }
+
+  void putCoinVote(String account, int seq, String voter, String hash, String data) => _db.execute(
+    'INSERT OR IGNORE INTO coin_vote(account, seq, voter, hash, data) VALUES(?, ?, ?, ?, ?)',
+    [account, seq, voter, hash, data],
+  );
+
+  bool coinVoteExists(String account, int seq, String voter, String hash) => _db.select(
+    'SELECT 1 FROM coin_vote WHERE account = ? AND seq = ? AND voter = ? AND hash = ?',
+    [account, seq, voter, hash],
+  ).isNotEmpty;
+
+  bool coinVotedSlot(String account, int seq, String voter) => _db.select(
+    'SELECT 1 FROM coin_vote WHERE account = ? AND seq = ? AND voter = ?',
+    [account, seq, voter],
+  ).isNotEmpty;
+
+  int coinVotesInSlot(String account, int seq) => _db.select(
+    'SELECT COUNT(*) c FROM coin_vote WHERE account = ? AND seq = ?',
+    [account, seq],
+  ).first['c'] as int;
+
+  List<String> coinVoteRows() =>
+      _db.select('SELECT data FROM coin_vote').map((r) => r['data'] as String).toList();
+
+  List<String> coinVoteRowsFor(String account) => _db
+      .select('SELECT data FROM coin_vote WHERE account = ? ORDER BY seq ASC', [account])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  Map<String, int> coinVoteCounts() => {
+    for (final r in _db.select('SELECT account, COUNT(*) c FROM coin_vote GROUP BY account'))
+      r['account'] as String: r['c'] as int,
+  };
+
+  // ---------- marketplace ----------
+
+  void putListing(String id, String kind, String author, int rev, int ts, bool deleted, String data) =>
+      _db.execute(
+        'INSERT OR REPLACE INTO mk_listing(id, kind, author, rev, ts, deleted, data) VALUES(?, ?, ?, ?, ?, ?, ?)',
+        [id, kind, author, rev, ts, deleted ? 1 : 0, data],
+      );
+
+  String? listing(String id) {
+    final rows = _db.select('SELECT data FROM mk_listing WHERE id = ?', [id]);
+    return rows.isEmpty ? null : rows.first['data'] as String;
+  }
+
+  ({int rev, String author})? listingHead(String id) {
+    final rows = _db.select('SELECT rev, author FROM mk_listing WHERE id = ?', [id]);
+    if (rows.isEmpty) return null;
+    return (rev: rows.first['rev'] as int, author: rows.first['author'] as String);
+  }
+
+  List<String> listings({String? kind, String? author, bool deleted = false, int limit = 2000}) {
+    final where = <String>['deleted = ?'];
+    final args = <Object>[deleted ? 1 : 0];
+    if (kind != null) {
+      where.add('kind = ?');
+      args.add(kind);
+    }
+    if (author != null) {
+      where.add('author = ?');
+      args.add(author);
+    }
+    args.add(limit);
+    return _db
+        .select('SELECT data FROM mk_listing WHERE ${where.join(' AND ')} ORDER BY ts DESC LIMIT ?', args)
+        .map((r) => r['data'] as String)
+        .toList();
+  }
+
+  /// id -> revision, for every listing including withdrawn ones.
+  Map<String, int> listingRevs() => {
+    for (final r in _db.select('SELECT id, rev FROM mk_listing')) r['id'] as String: r['rev'] as int,
+  };
+
+  int listingCountBy(String author) => _db.select(
+    'SELECT COUNT(*) c FROM mk_listing WHERE author = ? AND deleted = 0',
+    [author],
+  ).first['c'] as int;
+
+  int listingCount() => _db.select('SELECT COUNT(*) c FROM mk_listing').first['c'] as int;
+
+  /// Drops the oldest withdrawn or stale listings beyond [keep].
+  void trimListings(int keep) => _db.execute(
+    'DELETE FROM mk_listing WHERE id IN (SELECT id FROM mk_listing ORDER BY deleted DESC, ts ASC '
+    'LIMIT max(0, (SELECT COUNT(*) FROM mk_listing) - ?))',
+    [keep],
+  );
+
+  void deleteListing(String id) => _db.execute('DELETE FROM mk_listing WHERE id = ?', [id]);
+
+  void putRecord(String id, String kind, int ts, String data) => _db.execute(
+    'INSERT OR REPLACE INTO mk_record(id, kind, ts, data) VALUES(?, ?, ?, ?)',
+    [id, kind, ts, data],
+  );
+
+  String? record(String id) {
+    final rows = _db.select('SELECT data FROM mk_record WHERE id = ?', [id]);
+    return rows.isEmpty ? null : rows.first['data'] as String;
+  }
+
+  List<String> records(String kind, {int limit = 1000}) => _db
+      .select('SELECT data FROM mk_record WHERE kind = ? ORDER BY ts DESC LIMIT ?', [kind, limit])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  void deleteRecord(String id) => _db.execute('DELETE FROM mk_record WHERE id = ?', [id]);
+
+  void putReview(String id, String subject, String author, int ts, String data) => _db.execute(
+    'INSERT OR IGNORE INTO mk_review(id, subject, author, ts, data) VALUES(?, ?, ?, ?, ?)',
+    [id, subject, author, ts, data],
+  );
+
+  List<String> reviews(String subject) => _db
+      .select('SELECT data FROM mk_review WHERE subject = ? ORDER BY ts DESC', [subject])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  List<String> allReviews({int limit = 4000}) => _db
+      .select('SELECT data FROM mk_review ORDER BY ts DESC LIMIT ?', [limit])
+      .map((r) => r['data'] as String)
+      .toList();
+
+  bool hasReview(String id) => _db.select('SELECT 1 FROM mk_review WHERE id = ?', [id]).isNotEmpty;
 }

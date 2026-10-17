@@ -105,23 +105,31 @@ void main() {
       expect(c.coin!.history(a.me.id).first.memo, 'lunch');
     });
 
-    test('two spends of the same coins keep the lower hash on every phone', () async {
+    test('a double spend keeps the payment witnesses saw first, and flags the spender', () async {
       final a = await person();
       final b = await person();
       await eventually(() => b.coin!.balance(a.me.id) == Coin.grant);
       final mint = a.coin!.pool().firstWhere((t) => t.isMint && t.from == a.me.id);
       final first = await a.coin!.pay(b.me.id, 100, memo: 'one');
+      await eventually(() => b.coin!.view().contains(first.hash));
       final second = await spend(a.me, mint, b.me.id, 200, 'two');
       await a.coin!.onMessage(b.me.id, {'op': 'tx', 'tx': second.toJson()});
       await b.coin!.onMessage(a.me.id, {'op': 'tx', 'tx': second.toJson()});
       await eventually(() => a.coin!.pool().length >= 3 && b.coin!.pool().where((t) => t.from == a.me.id).length >= 3);
+      await eventually(() => a.coin!.votes().any((v) => v.voter == b.me.id && v.hash == first.hash));
 
-      final winner = first.hash.compareTo(second.hash) < 0 ? first : second;
-      expect(a.coin!.balance(), Coin.grant - winner.amount);
-      expect(b.coin!.balance(a.me.id), a.coin!.balance());
-      expect(b.coin!.balance(), Coin.grant + winner.amount);
-      expect(a.coin!.view().contains(winner.hash), isTrue);
-      expect(a.coin!.view().contains(winner == first ? second.hash : first.hash), isFalse);
+      for (final coin in [a.coin!, b.coin!]) {
+        expect(coin.view().contains(first.hash), isTrue);
+        expect(coin.view().contains(second.hash), isFalse);
+        expect(coin.flagged(a.me.id), isTrue);
+        expect(coin.confirmation(first.hash).state, Settle.conflicted);
+      }
+      expect(b.coin!.balance(), Coin.grant + 100);
+
+      // Without any votes the lower hash is the tie-break.
+      final bare = compileCoin(a.coin!.pool());
+      final lower = first.hash.compareTo(second.hash) < 0 ? first : second;
+      expect(bare.contains(lower.hash), isTrue);
     });
 
     test('forged, overspent and second grants are refused', () async {
@@ -178,16 +186,16 @@ void main() {
     });
     await pumpScreen(tester, engine, const CoinWalletScreen());
     await tester.pump();
+    expect(find.text('5.00'), findsNothing, reason: 'the balance starts hidden');
+    await tester.tap(find.byTooltip('Show balance'));
+    await tester.pump();
     expect(find.text('5.00'), findsOneWidget);
     expect(find.text('MENTOS'), findsOneWidget);
     expect(find.text('Welcome grant'), findsOneWidget);
     expect(find.text('Network treasury'), findsNothing);
     expect(find.byTooltip('Explore ledger'), findsNothing);
     await tester.scrollUntilVisible(find.text('Explore the Mentos network'), 400);
-    expect(
-      tester.getTopLeft(find.text('Marketplace')).dy,
-      lessThan(tester.getTopLeft(find.text('Explore the Mentos network')).dy),
-    );
+    expect(find.text('Market'), findsOneWidget, reason: 'the market is a quick action, not a card');
     expect(find.text('+5.00'), findsOneWidget);
     expect(tester.takeException(), isNull);
 

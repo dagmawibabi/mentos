@@ -63,7 +63,7 @@ class _HelpScreenState extends State<HelpScreen> {
         paragraphs: [
           'There is no account server and no inbox waiting in a data center. A post, message, or payment is signed on this phone and handed to another phone that is online at the same time.',
           'The connection is iroh: QUIC, with a direct path punched through the routers when that works, and an encrypted relay when it does not. Relays move ciphertext. They do not store posts, chats, or the ledger, and they cannot read them.',
-          'There is no public directory. You meet someone with a ticket or a QR code, or because your phones already share a feed, a space, a group, or the coin ledger.',
+          'You meet someone with a ticket or a QR code, or because your phones already share a feed, a space, a group, or the coin ledger. Public spaces and marketplace listings are signed by their owners and spread from phone to phone, so they also reach people who have never met.',
         ],
       ),
       _Topic(
@@ -157,7 +157,8 @@ class _HelpScreenState extends State<HelpScreen> {
         title: 'The Mentos ledger',
         paragraphs: [
           'Mentos coins are one ledger the phones keep together, not a bank balance. The treasury starts holding the entire supply and has no private key, so it cannot spend on its own. Nothing else mints coins. A new identity may draw $grant once, signed by its own key. Restoring the phrase writes that same draw again, not a second one.',
-          'Later payments are signed by the sender and name the hash of their previous payment. Phones that have seen the same payments compute the same balances. If two payments spend the same coins, the one with the lower hash is kept.',
+          'Later payments are signed by the sender and name the hash of their previous payment. Phones that have seen the same payments compute the same balances. Every phone signs a vote for the first payment it sees at each place in a chain; if someone signs two payments that spend the same coins, the one backed by more witness stake is kept and the account is flagged as a double spender.',
+          'Escrow is part of the ledger. A hold moves coins out of the payer’s balance for a payee. Only the payer can release it; the payee can hand it back; once the payee has accepted and the deadline passes without a dispute, the payee can claim it. An arbiter both sides agreed on can split a disputed hold. Marketplace orders, tasks, rentals and birr trades all pay this way.',
           'A checkmark pays the treasury. The price starts at $badge while the treasury is full and moves as coins are drawn out and paid back. A service payment adds a fee of one part in twenty, which the treasury receives. The other person receives the amount you agreed.',
           'Two groups of phones that have not met can disagree until they exchange what they have seen. This is not irreversible settlement. A birr price on a listing is an agreement between two people. The app moves Mentos, not bank money.',
         ],

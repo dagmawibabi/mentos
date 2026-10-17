@@ -12,11 +12,10 @@ import '../data/models.dart';
 import '../state/settings.dart';
 import 'link_preview.dart';
 import 'live_loc.dart';
+import 'market/market.dart';
 import 'pay/coin.dart';
 import 'transport.dart';
 import 'views.dart';
-
-part 'market.dart';
 
 /// Change keys emitted on [Engine.changes] besides plain scopes.
 abstract final class Ch {
@@ -72,9 +71,13 @@ class Engine {
   final MediaStore media;
   Settings _settings;
   CoinLedger? _coin;
+  Market? _market;
 
   /// The shared Mentos ledger. Null until [start] has begun.
   CoinLedger? get coin => _coin;
+
+  /// The peer-to-peer marketplace. Null until [start] has begun.
+  Market? get market => _market;
 
   final _mem = <String, _Mem>{};
   final _tombstones = <String>{};
@@ -221,6 +224,7 @@ class Engine {
 
   Future<void> start(String dataDir) async {
     _coin ??= CoinLedger(this);
+    _market ??= Market(this);
     try {
       await _coin!.ensureGrant();
     } catch (_) {}
@@ -301,6 +305,7 @@ class Engine {
     _emit({Ch.net});
     try {
       await _coin?.join();
+      await _market?.join();
     } catch (_) {}
   }
 
@@ -382,6 +387,7 @@ class Engine {
   Future<void> _joinMesh() async {
     try {
       await _coin?.join();
+      await _market?.join();
       await _joinFeedTopic(me.id, const []);
       for (final p in db.peers().where((p) => p.iFollow && !p.blocked)) {
         await _joinFeedTopic(p.id, [p.id]);
@@ -399,6 +405,11 @@ class Engine {
   Future<void> stop() async {
     _running = false;
     _held = true;
+    final market = _market;
+    if (market != null) {
+      await market.dispose();
+      _market = null;
+    }
     final coin = _coin;
     if (coin != null) {
       await coin.dispose();
@@ -674,6 +685,7 @@ class Engine {
         if (up) {
           _heard(peer);
           if (topic == Coin.topic) unawaited(_coin?.onPeer(peer));
+          if (topic == Market.topic) unawaited(_market?.onPeer(peer));
         }
         _emit({Ch.net, Ch.presence});
       case StatusEvent():
@@ -1013,9 +1025,7 @@ class Engine {
     await _flushOutbox();
     unawaited(_retrySync(peer));
     unawaited(_coin?.onPeer(peer));
-    for (final listing in marketBoard().where((r) => r['from'] == me.id)) {
-      unawaited(sendApp(peer, 'market', listing));
-    }
+    unawaited(_market?.onPeer(peer));
   }
 
   Future<void> _hello(String peer, {bool reply = false}) async {
@@ -1137,8 +1147,6 @@ class Engine {
       case 'revoke':
         final scope = m['scope'] as String? ?? '';
         await _onRevoke(from, scope);
-      case 'adclaim':
-        _noteAdClaim(from, m['id'] as String? ?? '');
       case 'xfer':
         if (xferHeld && m['op'] == 'offer') {
           await _send(from, {'t': 'xfer', 'op': 'decline', 'id': m['id']});
@@ -1175,8 +1183,6 @@ class Engine {
             body is Map &&
             !(db.peer(from)?.blocked ?? false)) {
           final cast = body.cast<String, dynamic>();
-          if (app == 'market') _saveMarket(from, cast);
-          if (app == 'task') await receiveTask(from, cast);
           if (app == 'channel-invite' && cast['id'] is String) {
             noteActivity(
               Activity(
@@ -1771,6 +1777,12 @@ class Engine {
         final coin = _coin;
         if (m != null && coin != null) await coin.onMessage(from, m);
       }
+      return;
+    }
+    if (topic == Market.topic) {
+      final m = _decode(data);
+      final market = _market;
+      if (m != null && market != null) await market.onGossip(from, m);
       return;
     }
     final spaceId = _spaceTopics[topic];
@@ -3326,6 +3338,45 @@ class Engine {
     return 'mentos://s/${base64Url.encode(utf8.encode(jsonEncode(j))).replaceAll('=', '')}';
   }
 
+  /// An invite any member may pass on: the owner's own, or for a public
+  /// space the one in its directory entry.
+  Future<String> spaceLink(String spaceId) async {
+    final s = db.space(spaceId);
+    if (s == null) throw StateError('Space not found');
+    if (s.owner == me.id) return spaceInvite(spaceId);
+    // The owner's signed directory entry is what makes a space public to
+    // everyone; a member's local copy of the flag can lag behind it.
+    final entry = _market?.spaceListing(spaceId);
+    final invite = entry?.body['invite'];
+    if (entry != null && entry.author == s.owner && invite is String) return invite;
+    throw StateError(s.public
+        ? 'The directory entry has not reached this phone yet'
+        : 'Only the owner can invite people to a private space');
+  }
+
+  /// What a mentos:// link would add, checked but not acted on.
+  Future<({String kind, String id, String name, bool known})?> peekTicket(String raw) async {
+    final m = RegExp(r'mentos://([us])/([A-Za-z0-9_\-]+)', caseSensitive: false).firstMatch(raw);
+    if (m == null) return null;
+    final Map j;
+    try {
+      j = jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(m.group(2)!)))) as Map;
+    } catch (_) {
+      return null;
+    }
+    if (m.group(1)!.toLowerCase() == 'u') {
+      final id = j['i'];
+      if (id is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) return null;
+      return (kind: 'peer', id: id, name: id == me.id ? 'You' : nameOf(id), known: db.peer(id)?.iFollow ?? false);
+    }
+    final e = Envelope.fromWire(j['e']);
+    if (e == null || e.kind != K.invite || !await e.verify()) return null;
+    final id = e.body['id'], owner = e.body['owner'], name = e.body['name'];
+    if (id is! String || owner != e.author || e.scope != Scope.spaceMeta(id)) return null;
+    final label = name is String && name.trim().isNotEmpty ? name.trim() : 'Space';
+    return (kind: 'space', id: id, name: label, known: db.space(id) != null);
+  }
+
   Future<void> updateSpace(
     String spaceId,
     SpaceInfo Function(SpaceInfo) change,
@@ -3334,6 +3385,9 @@ class Engine {
     if (s == null) return;
     final next = change(s);
     db.putSpace(next);
+    if (next.owner == me.id && (next.public != s.public || next.public)) {
+      unawaited(_market?.syncSpace(spaceId));
+    }
     final newlyBanned = next.roles.entries
         .where((e) => e.value == Role.banned && s.roles[e.key] != Role.banned)
         .map((e) => e.key)
@@ -3501,6 +3555,45 @@ class Engine {
     }
     posts.sort((a, b) => b.ts.compareTo(a.ts));
     return _postViews(posts.take(limit).toList(), marks);
+  }
+
+  static final hashtag = RegExp(r'#([\p{L}\p{N}_]{1,40})', unicode: true);
+
+  /// Hashtags in [text], lower-cased, without the #.
+  static Set<String> tagsIn(String text) => {
+    for (final m in hashtag.allMatches(text)) m.group(1)!.toLowerCase(),
+  };
+
+  /// Every post this phone can see (home feed and each space it is in).
+  List<PostView> _visiblePosts() {
+    final seen = <String>{};
+    return [
+      for (final p in [
+        ...feed(limit: 600),
+        for (final s in db.spaces()) ...feed(spaceId: s.id, limit: 300),
+      ])
+        if (seen.add(p.id)) p,
+    ]..sort((a, b) => b.item.ts.compareTo(a.item.ts));
+  }
+
+  /// Posts tagged with [tag], newest first.
+  List<PostView> tagged(String tag) {
+    final t = tag.toLowerCase().replaceFirst('#', '');
+    return [for (final p in _visiblePosts()) if (tagsIn(p.text).contains(t)) p];
+  }
+
+  /// The most used tags in recent posts, most used first.
+  List<({String tag, int count})> trendingTags({int limit = 12}) {
+    final counts = <String, int>{};
+    final cutoff = nowMs() - const Duration(days: 14).inMilliseconds;
+    for (final p in _visiblePosts()) {
+      if (p.item.ts < cutoff) continue;
+      for (final t in tagsIn(p.text)) {
+        counts[t] = (counts[t] ?? 0) + 1;
+      }
+    }
+    final list = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return [for (final e in list.take(limit)) (tag: e.key, count: e.value)];
   }
 
   List<PostView> bookmarked() {
@@ -4120,162 +4213,6 @@ class Engine {
     );
   }
 
-  List<Map<String, dynamic>> marketBoard() {
-    final raw = db.getKv('market');
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final d = jsonDecode(raw);
-      if (d is! List) return const [];
-      final rows = [
-        for (final x in d)
-          if (x is Map) x.cast<String, dynamic>(),
-      ];
-      final ids = rows.map((r) => r['id']).toSet();
-      return [
-        ...rows,
-        ..._kvList('task-records').where((r) => !ids.contains(r['id'])),
-      ];
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  Future<void> postMarket(Map<String, dynamic> offer) async {
-    final previous = marketBoard()
-        .where((x) => x['id'] == offer['id'])
-        .firstOrNull;
-    if (previous != null && previous['from'] != me.id)
-      throw StateError('Only the publisher can update this listing');
-    if (offer['kind'] == 'plugin') validatePlugin(offer);
-    if (offer['title'] is! String ||
-        offer['minor'] is! int ||
-        (offer['minor'] as int) < 0)
-      throw ArgumentError('Invalid listing');
-    final row = {
-      ...offer,
-      'from': me.id,
-      'id': offer['id'] ?? '${me.id}:${toHex(randomBytes(12))}',
-      'revision': ((previous?['revision'] as int?) ?? 0) + 1,
-      'updated': nowMs(),
-    };
-    final list = [...marketBoard()]..removeWhere((m) => m['id'] == row['id']);
-    list.insert(0, row);
-    db.setKv('market', jsonEncode(list.take(80).toList()));
-    if (row['kind'] == 'task') {
-      db.setKv(
-        'task-records',
-        jsonEncode([
-          ..._kvList('task-records').where((r) => r['id'] != row['id']),
-          row,
-        ]),
-      );
-    }
-    for (final p in db.peers().where((p) => !p.blocked).take(32)) {
-      unawaited(
-        sendApp(
-          p.id,
-          'market',
-          row,
-          queueId: 'market:${row['id']}:${row['revision']}:${p.id}',
-        ),
-      );
-    }
-    _emit({Ch.feed});
-  }
-
-  void _saveMarket(String from, Map<String, dynamic> body) {
-    if (body['title'] is! String ||
-        body['minor'] is! int ||
-        (body['minor'] as int) < 0 ||
-        (body['minor'] as int) > Coin.maxAmount ||
-        (body['revision'] != null && body['revision'] is! int) ||
-        (body['about'] != null && body['about'] is! String) ||
-        (body['kind'] is! String))
-      return;
-    if (body['applications'] != null &&
-        (body['applications'] is! List ||
-            (body['applications'] as List).any((x) => x is! String)))
-      return;
-    if (body['worker'] != null && body['worker'] is! String) return;
-    if (body['status'] != null && body['status'] is! String) return;
-    if (body['timeline'] != null &&
-        (body['timeline'] is! List ||
-            (body['timeline'] as List).any(
-              (x) => x is! Map || x['actor'] is! String || x['ts'] is! int,
-            )))
-      return;
-    if (body['evidence'] != null &&
-        (body['evidence'] is! Map ||
-            (body['evidence'] as Map)['text'] is! String ||
-            (body['evidence'] as Map)['actor'] is! String))
-      return;
-    if (body['kind'] == 'plugin') {
-      try {
-        validatePlugin(body);
-      } catch (_) {
-        return;
-      }
-    }
-    final row = {...body, 'from': from};
-    final id = row['id'];
-    if (id is! String || id.length > 160 || jsonEncode(body).length > 32000)
-      return;
-    final list = [...marketBoard()];
-    final old = list.where((x) => x['id'] == id).firstOrNull;
-    if (old != null &&
-        (old['from'] != from ||
-            ((old['revision'] as int?) ?? 0) >=
-                ((row['revision'] as int?) ?? 0)))
-      return;
-    list.removeWhere((m) => m['id'] == id);
-    list.insert(0, row);
-    db.setKv('market', jsonEncode(list.take(80).toList()));
-    if (row['kind'] == 'task') {
-      db.setKv(
-        'task-records',
-        jsonEncode([
-          ..._kvList('task-records').where((r) => r['id'] != row['id']),
-          row,
-        ]),
-      );
-    }
-    _emit({Ch.feed});
-  }
-
-  void _noteAdClaim(String from, String id) {
-    if (id.isEmpty || from.isEmpty) return;
-    final raw = db.getKv('adclaims:$id') ?? '[]';
-    List list;
-    try {
-      final d = jsonDecode(raw);
-      list = d is List ? List.of(d) : <dynamic>[];
-    } catch (_) {
-      list = <dynamic>[];
-    }
-    if (!list.contains(from)) list.add(from);
-    db.setKv('adclaims:$id', jsonEncode(list));
-  }
-
-  List<String> adClaims(String id) {
-    final raw = db.getKv('adclaims:$id');
-    if (raw == null) return const [];
-    try {
-      final d = jsonDecode(raw);
-      if (d is List)
-        return [
-          for (final x in d)
-            if (x is String) x,
-        ];
-    } catch (_) {}
-    return const [];
-  }
-
-  void removeMarket(String id) {
-    final row = marketBoard().where((r) => r['id'] == id).firstOrNull;
-    if (row == null || row['from'] != me.id) return;
-    unawaited(postMarket({...row, 'deleted': true}));
-  }
-
   List<Map<String, dynamic>> _kvList(String key) {
     final raw = db.getKv(key);
     if (raw == null || raw.isEmpty) return const [];
@@ -4289,6 +4226,24 @@ class Engine {
     } catch (_) {
       return const [];
     }
+  }
+
+  Future<void> inviteToChannel(Bcast channel, String peer) async {
+    if (channel.owner != me.id) {
+      throw StateError('Only the owner can invite subscribers');
+    }
+    final item = items(Scope.feed(me.id))
+        .where((i) => i.id == channel.id)
+        .firstOrNull;
+    if (item == null) throw StateError('Channel is unavailable');
+    await _sendOrQueue('channel-info:${channel.id}:$peer', peer, {
+      't': 'item',
+      'e': item.e.toWire(),
+    });
+    await sendApp(peer, 'channel-invite', {
+      'id': channel.id,
+      'name': channel.name,
+    }, queueId: 'channel-invite:${channel.id}:$peer');
   }
 
   List<Map<String, dynamic>> installedPlugins() => _kvList('plugins');
@@ -4310,7 +4265,7 @@ class Engine {
   Future<void> installPlugin(Map<String, dynamic> row) async {
     final id = row['id']?.toString() ?? '';
     if (id.isEmpty) return;
-    validatePlugin(row);
+    validatePack(row);
     if ((row['minor'] as num? ?? 0) > 0 &&
         row['from'] != me.id &&
         !listingOwned(id))

@@ -44,7 +44,9 @@ Goal: other apps can be built on the same core.
 | Background delivery | Opt-in Android foreground service keeps the node online with a quiet permanent notification, a partial wake lock, and a prompt to exclude Mentos from battery optimisation. | ✅ |
 | Already there | Feed, stories, likes, bookmarks, comments, replies, reposts, polls, DMs, group chats, spaces with channels and forums. | ✅ |
 | Threads-style polish | Quote posts, multi-part thread composer, a Replies tab on profiles. | 📐 |
-| Hashtags and mentions in posts | Tappable `#tag` and `@name`, local tag pages. Mentions already trigger notifications. | 🚧 |
+| Hashtags | Tappable `#tag` in any script (including Amharic), tag pages across the home feed and every space, related and trending tags. | ✅ |
+| Nested comments | Full reply trees with a thread line per level back to the root, collapse/expand, replies to missing comments shown as their own thread. | ✅ |
+| Public spaces and invites | Public spaces publish a signed directory entry that spreads network-wide (Discover spaces). Space invites in chats and posts render as one-tap join cards; any member of a public space can share it, to people or groups. | ✅ |
 
 ## 3. Control and nerdy tools
 
@@ -65,16 +67,32 @@ Goal: other apps can be built on the same core.
 | Voice and video calls | Signalling over the direct channel; 16 kHz PCM with echo cancellation, per-speaker jitter buffers and mixing; 240p JPEG video at 8 fps; group calls as a full mesh up to 4; call log, missed-call notifications. Logic tested end to end in-process. | ✅ |
 | Live streams | Channel owners go live (video or audio); subscribers are notified and join; the host serves up to 16 viewers directly; live chat and hearts relayed by the host. | ✅ |
 | Payments | Mutual credit: bilateral, hash-chained ledgers where every entry is signed by both people, per-contact credit limits, approvals, requests. Threat model in `docs/PAYMENTS.md`. | ✅ |
+| Mentos ledger v3 | Escrow in the ledger (lock, accept, release, refund, cancel, dispute, claim, arbiter splits), first-seen witness votes with stake-weighted fork choice, double-spend flagging, Accepted/Witnessed/Final/Conflicted confirmations, cached incremental compile, payment bundles attached to deals. See `docs/COIN.md`. | ✅ |
 | Not tested on real phones yet | Audio quality, echo, video framing and battery use need two devices. | 🚧 |
 | Better codecs | Opus for audio (about 10x less bandwidth than raw PCM) and hardware H.264 for video. | 📐 |
 | Bigger streams | Viewers re-serving media to other viewers (a tree), so audiences can grow past what one phone can upload. | 📐 |
 | Credit across people | Paying through a chain of trust (Ada → Bo → Cy). | ⏳ |
 
-## 5. Reliability work
+## 5. Marketplace
+
+See `docs/MARKETPLACE.md`.
+
+| Feature | What was built | Status |
+|---|---|---|
+| Listings | Signed, revisioned listings on a network-wide gossip topic with peer sync, so they reach strangers; tombstones, expiry and refresh, per-author and per-phone caps, total validation. | ✅ |
+| Shop | Photos, options, stock, delivery methods, cart per seller, escrowed checkout with optional arbiter, accept/decline/ship/deliver, digital auto-delivery, confirm, dispute, auto-claim, verified-purchase reviews and reputation. | ✅ |
+| Tasks | Criteria and evidence types, applications, escrow on assignment, evidence submission with photos/files/links, criteria checklist review, changes, approval, disputes with arbiters, worker claims. | ✅ |
+| Ads | Campaigns with budget, per-view and per-click prices, viewer/carrier split, daily caps; signed receipts; batched payouts; sponsored cards in the feed for opted-in viewers; campaign analytics. | ✅ |
+| Resources | On-device diagnostics (CPU, memory, disk, network), storage leases with encrypted files and proof-of-storage audits that release pay as days pass, verified compute jobs (gzip, image, proof-of-work). | ✅ |
+| Exchange | Mentos-for-birr offers; the Mentos seller locks first, the buyer pays birr off-app, release or claim, disputes and arbiters. | ✅ |
+| Fraud resistance | Sybil identities can still farm ad views and vote with grant stake; there is no global ordering of payments. | ⏳ |
+
+## 6. Reliability work
 From `review/PROJECT_REVIEW_2026-10-10.md`:
 - ✅ Group keys reach an invitee only after they accept; the owner rotates the key whenever someone leaves or is removed (both covered by tests). Pending invitations now survive restarts, expire after 14 days and can be revoked.
 - ✅ Group admins are no longer shown membership controls only the owner can use.
-- Still open: key files stored as plain files (needs Android Keystore / platform secure storage) and byte limits on the native gossip queue.
+- ✅ Native inbound messages share a global 64-stream budget (bounded memory however many peers connect) and buffers grow with the bytes that arrive; the event queue caps both count and bytes; the call handshake times out; concurrent fetches of one blob are serialized.
+- Still open: key files stored as plain files (needs Android Keystore / platform secure storage).
 
-## 6. Building
+## 7. Building
 See the README. The APK needs the Rust library built for Android first (`native/build-android.ps1`, or `cargo ndk -t arm64-v8a -P 26 -o android/app/src/main/jniLibs build --release` from `native/`).

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../core/format.dart';
@@ -18,7 +17,9 @@ import '../../widgets/avatar.dart';
 import '../../widgets/link_card.dart';
 import '../../widgets/media.dart';
 import '../../widgets/nsfw.dart';
+import '../../widgets/invite_card.dart';
 import '../../widgets/ui.dart';
+import 'tag_screen.dart';
 import '../chats/share_sheet.dart';
 
 /// Who saw a post. Authors see names; everyone else sees the count.
@@ -147,10 +148,10 @@ class PostCard extends ConsumerWidget {
       post: post,
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          Space.gutter,
-          detailed ? Space.md : 0,
-          Space.gutter,
-          detailed ? Space.sm : Space.md,
+          Space.sm,
+          detailed ? Space.sm : 0,
+          Space.sm,
+          detailed ? Space.sm : Space.sm,
         ),
         child: Pressable(
           onTap: detailed
@@ -171,7 +172,7 @@ class PostCard extends ConsumerWidget {
                       );
                       return;
                     }
-                    await OpenFilex.open(f.path, type: files.first.mime);
+                    await showLocalFile(context, f, name: files.first.name, mime: files.first.mime);
                     return;
                   }
                   context.push('/post/${post.id}');
@@ -191,9 +192,9 @@ class PostCard extends ConsumerWidget {
                   child: Row(
                     children: [
                       GestureDetector(
-                        onTap: () => context.push(
-                          post.author == e.me.id ? '/me' : '/u/${post.author}',
-                        ),
+                        onTap: () => post.author == e.me.id
+                            ? context.go('/me')
+                            : context.push('/u/${post.author}'),
                         child: Avatar(id: post.author, size: 38),
                       ),
                       const SizedBox(width: Space.md),
@@ -274,6 +275,7 @@ class PostCard extends ConsumerWidget {
                               const SizedBox(height: Space.sm),
                             _TaggedText(text: post.text, detailed: detailed),
                             LinkCard(text: post.text, attached: post.preview),
+                            if (firstInvite(post.text) != null) InviteCard(text: post.text),
                           ],
                           if (post.repost != null) ...[
                             if (post.title.isNotEmpty || post.text.isNotEmpty)
@@ -483,52 +485,18 @@ void showLikers(BuildContext context, WidgetRef ref, PostView post) {
   );
 }
 
-class _TaggedText extends ConsumerWidget {
+class _TaggedText extends StatelessWidget {
   const _TaggedText({required this.text, required this.detailed});
   final String text;
   final bool detailed;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final p = context.pal;
     final style = detailed
         ? Txt.body(p.ink).copyWith(fontSize: 17, height: 1.45)
         : Txt.body(p.ink);
-    final parts = text.split(RegExp(r'(?=#\w)'));
-    if (parts.length == 1) {
-      return Text(
-        text,
-        style: style,
-        maxLines: detailed ? null : 12,
-        overflow: detailed ? null : TextOverflow.ellipsis,
-      );
-    }
-    return Text.rich(
-      TextSpan(
-        style: style,
-        children: [
-          for (final part in parts)
-            if (part.startsWith('#'))
-              TextSpan(
-                text: part.split(RegExp(r'\s')).first,
-                style: style.copyWith(color: p.accent),
-                children: [
-                  if (part.contains(' '))
-                    TextSpan(
-                      text: part.substring(
-                        part.split(RegExp(r'\s')).first.length,
-                      ),
-                      style: style,
-                    ),
-                ],
-              )
-            else
-              TextSpan(text: part),
-        ],
-      ),
-      maxLines: detailed ? null : 12,
-      overflow: detailed ? TextOverflow.visible : TextOverflow.ellipsis,
-    );
+    return TaggedText(text: withoutInvites(text), style: style, maxLines: detailed ? null : 12);
   }
 }
 

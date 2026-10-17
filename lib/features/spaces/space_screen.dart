@@ -221,7 +221,7 @@ class _Members extends ConsumerWidget {
                     ),
                   ),
             onTap: m.id == e.me.id
-                ? () => context.push('/me')
+                ? () => context.go('/me')
                 : () => context.push('/u/${m.id}'),
             onLongPress: myRole == Role.owner && m.id != e.me.id
                 ? () => showActions(context, [
@@ -274,23 +274,37 @@ Future<void> _sendInvite(
 ) async {
   final e = ref.read(engineProvider);
   final people = e.people().where((x) => !x.blocked).toList();
+  final groups = e.db.groups();
   final picked = await showModalBottomSheet<String>(
     context: context,
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: ListView(
-        shrinkWrap: true,
-        children: [
-          for (final person in people)
-            ListTile(
-              title: Text(e.nameOf(person.id)),
-              onTap: () => Navigator.pop(ctx, person.id),
-            ),
-        ],
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .7),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            if (groups.isNotEmpty) const SectionLabel('Groups'),
+            for (final g in groups)
+              ListTile(
+                leading: const Icon(Icons.groups_outlined),
+                title: Text(g.name),
+                onTap: () => Navigator.pop(ctx, Scope.gdm(g.id)),
+              ),
+            const SectionLabel('People'),
+            for (final person in people)
+              ListTile(
+                leading: const Icon(Icons.person_outline_rounded),
+                title: Text(e.nameOf(person.id)),
+                onTap: () => Navigator.pop(ctx, Scope.dm(e.me.id, person.id)),
+              ),
+          ],
+        ),
       ),
     ),
   );
   if (picked == null) return;
-  await e.sendMessage(Scope.dm(e.me.id, picked), text: link);
+  await e.sendMessage(picked, text: link);
   if (context.mounted) toast(context, 'Invite sent');
 }
 
@@ -301,7 +315,7 @@ Future<void> showInvite(
 ) async {
   late final String link;
   try {
-    link = await ref.read(engineProvider).spaceInvite(space.id);
+    link = await ref.read(engineProvider).spaceLink(space.id);
   } catch (e) {
     if (context.mounted) toast(context, '$e');
     return;
@@ -326,7 +340,9 @@ Future<void> showInvite(
               Text('Invite to ${space.name}', style: Txt.heading(p.ink)),
               const SizedBox(height: Space.sm),
               Text(
-                'Anyone with this invite holds the space key. Share it only with people you trust.',
+                space.public
+                    ? 'This space is public and listed in the network directory, so anyone may join.'
+                    : 'Anyone with this invite holds the space key. Share it only with people you trust.',
                 textAlign: TextAlign.center,
                 style: Txt.small(p.muted),
               ),

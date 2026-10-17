@@ -56,6 +56,10 @@ const GOSSIP_MAX_FRAME: usize = 64 * 1024;
 /// Headroom for gossip's own framing (message id, topic, scope).
 const MAX_BROADCAST: usize = GOSSIP_MAX_FRAME - 1024;
 const MAX_INBOUND_STREAMS: usize = 32;
+/// Across every connection. Each in-flight stream can hold up to
+/// [`MAX_DIRECT`] bytes, so this bounds inbound message memory at 128 MiB no
+/// matter how many peers connect at once.
+const MAX_INBOUND_TOTAL: usize = 64;
 const MAX_BLOB_SERVES: usize = 8;
 
 type EventQ = Arc<Mutex<VecDeque<String>>>;
@@ -70,6 +74,7 @@ static CONN_SEQ: AtomicU64 = AtomicU64::new(0);
 /// with the same key are not registered with the relay at once.
 static SHUTDOWN: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 static BLOB_SERVES: Semaphore = Semaphore::const_new(MAX_BLOB_SERVES);
+static INBOUND: Semaphore = Semaphore::const_new(MAX_INBOUND_TOTAL);
 
 /// A panic unwinding out of an `extern "C"` fn aborts the whole app, so every
 /// FFI entry point runs inside this.
@@ -231,6 +236,9 @@ struct Node {
     /// Set while a blob fetch should stop. A flag that is already true means
     /// cancel won the race before the fetch task started.
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// One fetch per hash at a time. Two at once used to share the same
+    /// `.part` file and corrupt each other.
+    fetches: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Long-lived tasks that hold an `Arc<Node>`; aborted on stop.
     background: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -347,6 +355,11 @@ impl Node {
                 let events = events.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
+                    // The global budget is taken inside the task so one busy
+                    // peer waiting for it cannot stall this accept loop.
+                    let Ok(_global) = INBOUND.acquire().await else {
+                        return;
+                    };
                     let read =
                         tokio::time::timeout(Duration::from_secs(60), read_len_prefixed(&mut recv)).await;
                     if let Ok(Ok(data)) = read {
@@ -493,8 +506,17 @@ async fn read_len_prefixed(recv: &mut RecvStream) -> Result<Vec<u8>> {
     if n > MAX_DIRECT {
         return Err(anyhow!("message too large"));
     }
-    let mut buf = vec![0u8; n];
-    recv.read_exact(&mut buf).await?;
+    // Grow with the bytes that actually arrive. Allocating the announced
+    // length up front let a peer reserve 2 MiB per stream for free.
+    let mut buf = Vec::with_capacity(n.min(64 * 1024));
+    let mut chunk = [0u8; 16 * 1024];
+    while buf.len() < n {
+        let want = (n - buf.len()).min(chunk.len());
+        match recv.read(&mut chunk[..want]).await? {
+            Some(0) | None => return Err(anyhow!("message cut short")),
+            Some(k) => buf.extend_from_slice(&chunk[..k]),
+        }
+    }
     if recv.read(&mut [0u8; 1]).await?.is_some() {
         return Err(anyhow!("trailing message bytes"));
     }
@@ -637,6 +659,27 @@ async fn fetch_blob(node: &Node, hash: &str, peer: EndpointId) -> Result<bool> {
     if dest.is_file() {
         return Ok(true);
     }
+    let gate = mutex(&node.fetches)
+        .entry(hash.clone())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone();
+    let _one = gate.lock().await;
+    let result = fetch_blob_locked(node, &hash, peer, &dest).await;
+    {
+        let mut g = mutex(&node.fetches);
+        // Drop the gate once nobody else is waiting on it.
+        if g.get(&hash).is_some_and(|a| Arc::strong_count(a) <= 2) {
+            g.remove(&hash);
+        }
+    }
+    result
+}
+
+async fn fetch_blob_locked(node: &Node, hash: &str, peer: EndpointId, dest: &Path) -> Result<bool> {
+    let hash = hash.to_string();
+    if dest.is_file() {
+        return Ok(true);
+    }
     let flag = cancel_flag(node, &hash);
     if flag.load(Ordering::Relaxed) {
         mutex(&node.cancels).remove(&hash);
@@ -753,6 +796,7 @@ async fn start_node(secret: [u8; 32], blob_dir: PathBuf) -> Result<Arc<Node>> {
         dials: Mutex::new(HashMap::new()),
         topics: Mutex::new(HashMap::new()),
         cancels: Mutex::new(HashMap::new()),
+        fetches: Mutex::new(HashMap::new()),
         background: Mutex::new(Vec::new()),
     });
     let _ = node_slot.set(Arc::downgrade(&node));
@@ -1532,6 +1576,28 @@ mod delivery_tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }).await.expect("message did not arrive");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_fetches_of_one_blob_share_a_single_download() {
+        let root = std::env::temp_dir().join(format!("mentos-native-fetch-{}-{}",
+            std::process::id(), CONN_SEQ.fetch_add(1, Ordering::Relaxed)));
+        let host = start_node([91; 32], root.join("host")).await.unwrap();
+        let guest = start_node([92; 32], root.join("guest")).await.unwrap();
+        guest.remember(local_addr(&host));
+        let data: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let hash = hex::encode(Sha256::digest(&data));
+        std::fs::write(host.blob_dir.join(&hash), &data).unwrap();
+        let a = fetch_blob(&guest, &hash, host.endpoint.id());
+        let b = fetch_blob(&guest, &hash, host.endpoint.id());
+        let (a, b) = tokio::time::timeout(Duration::from_secs(20), async { tokio::join!(a, b) }).await.unwrap();
+        assert!(a.unwrap() && b.unwrap());
+        assert_eq!(std::fs::read(guest.blob_dir.join(&hash)).unwrap(), data);
+        assert!(!guest.blob_dir.join(format!("{hash}.part")).exists());
+        assert!(mutex(&guest.fetches).is_empty());
+        host.router.shutdown().await.unwrap();
+        guest.router.shutdown().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

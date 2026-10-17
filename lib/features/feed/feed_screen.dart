@@ -7,8 +7,12 @@ import 'package:go_router/go_router.dart';
 import '../../app.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../net/market/market.dart';
+import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/ui.dart';
+import '../market/market_cards.dart';
+import '../market/market_kit.dart';
 import 'post_card.dart';
 import 'stories.dart';
 
@@ -134,13 +138,7 @@ class FeedScreen extends ConsumerWidget {
                           top: Space.md,
                           bottom: 96,
                         ),
-                        sliver: SliverList.builder(
-                          itemCount: posts.length,
-                          itemBuilder: (_, i) => PostCard(
-                            key: ValueKey(posts[i].id),
-                            post: posts[i],
-                          ),
-                        ),
+                        sliver: _FeedWithAds(posts: posts),
                       ),
                     ],
             ),
@@ -261,6 +259,34 @@ class _OfflineBanner extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Posts, with a sponsored card after every sixth post for people who
+/// turned on "Earn from ads" in the market.
+class _FeedWithAds extends ConsumerWidget {
+  const _FeedWithAds({required this.posts});
+  final List<PostView> posts;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final m = ref.watch(marketProvider);
+    ref.watch(marketTickProvider);
+    final ads = m != null && m.adsEnabled;
+    const every = 6;
+    final slots = ads && posts.length >= 3 ? posts.length ~/ every + (posts.length % every >= 3 ? 1 : 0) : 0;
+    return SliverList.builder(
+      itemCount: posts.length + slots,
+      itemBuilder: (_, i) {
+        if (ads && (i + 1) % (every + 1) == 0) {
+          final ad = m.nextAd(slot: i ~/ (every + 1));
+          return ad == null ? const SizedBox.shrink() : SponsoredCard(ad, key: ValueKey('ad-${ad.id}-$i'));
+        }
+        final index = ads ? i - (i + 1) ~/ (every + 1) : i;
+        if (index >= posts.length) return const SizedBox.shrink();
+        return PostCard(key: ValueKey(posts[index].id), post: posts[index]);
+      },
     );
   }
 }

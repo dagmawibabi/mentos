@@ -58,7 +58,7 @@ class GroupInfoScreen extends ConsumerWidget {
                 decoration: BoxDecoration(borderRadius: BorderRadius.circular(Radii.pill), border: Border.all(color: p.line)),
                 child: Text(g.roleOf(mid).name, style: Txt.mono(p.inkSoft, size: 10.5)),
               ),
-              onTap: () => context.push(mid == e.me.id ? '/me' : '/u/$mid'),
+              onTap: () => mid == e.me.id ? context.go('/me') : context.push('/u/$mid'),
               onLongPress: canAdmin && mid != e.me.id && mid != g.owner
                   ? () => showActions(context, [
                         if (g.roleOf(mid) != Role.mod)

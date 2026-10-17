@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:open_filex/open_filex.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../core/format.dart';
 import '../core/theme/app_theme.dart';
@@ -183,16 +181,8 @@ class XferTile extends ConsumerWidget {
                           x.media,
                           sources: [x.peer],
                         );
-                        if (f == null) return;
-                        final r = await OpenFilex.open(
-                          f.path,
-                          type: x.media.mime,
-                        );
-                        if (r.type != ResultType.done) {
-                          await SharePlus.instance.share(
-                            ShareParams(files: [XFile(f.path)]),
-                          );
-                        }
+                        if (f == null || !context.mounted) return;
+                        await showLocalFile(context, f, name: x.media.name, mime: x.media.mime);
                       },
                       child: const Text('Open'),
                     ),

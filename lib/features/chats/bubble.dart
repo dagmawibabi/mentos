@@ -8,6 +8,7 @@ import '../../core/theme/tokens.dart';
 import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
+import '../../widgets/invite_card.dart';
 import '../../widgets/link_card.dart';
 import '../../widgets/media.dart';
 import '../../widgets/nsfw.dart';
@@ -212,11 +213,11 @@ class Bubble extends ConsumerWidget {
               ],
             ),
           ),
-        if (m.text.isNotEmpty)
+        if (withoutInvites(m.text).isNotEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: Text(
-              m.text,
+              withoutInvites(m.text),
               style: (m.item.body['stk'] == true ? Txt.body(fg).copyWith(fontSize: 40, height: 1.2) : Txt.body(fg).copyWith(height: 1.38)),
             ),
           ),
@@ -224,6 +225,11 @@ class Bubble extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 0),
             child: LinkCard(text: m.text, attached: m.preview),
+          ),
+        if (firstInvite(m.text) != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+            child: InviteCard(text: m.text),
           ),
         if (!mediaOnly)
           Padding(

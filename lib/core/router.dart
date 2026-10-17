@@ -38,8 +38,15 @@ import '../features/shell/home_shell.dart';
 import '../state/providers.dart';
 import '../features/spaces/broadcast_screen.dart';
 import '../features/spaces/channels_screen.dart';
+import '../features/market/cart_screen.dart';
+import '../features/feed/tag_screen.dart';
+import '../features/spaces/discover_screen.dart';
+import '../features/market/deal_screens.dart';
+import '../features/market/device_check_screen.dart';
+import '../features/market/hub_screen.dart';
+import '../features/market/listing_screen.dart';
 import '../features/market/market_screen.dart';
-import '../features/market/task_screen.dart';
+import '../features/market/sell_screen.dart';
 import '../features/settings/dev_screen.dart';
 import '../features/spaces/spaces_screen.dart';
 import '../features/wallet/coin_wallet_screen.dart';
@@ -224,11 +231,26 @@ final routerProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(path: '/communities', builder: (_, _) => const SpacesScreen()),
-      GoRoute(path: '/market', builder: (_, _) => const MarketScreen()),
+      GoRoute(path: '/communities/discover', builder: (_, _) => const DiscoverSpacesScreen()),
       GoRoute(
-        path: '/market/task/:id',
-        builder: (_, s) => TaskScreen(id: s.pathParameters['id']!),
+        path: '/market',
+        builder: (_, s) => MarketScreen(
+          initial: MarketTab.values.where((t) => t.name == s.uri.queryParameters['tab']).firstOrNull ?? MarketTab.shop,
+        ),
       ),
+      GoRoute(path: '/market/l/:id', builder: (_, s) => ListingScreen(id: s.pathParameters['id']!)),
+      GoRoute(path: '/market/cart', builder: (_, s) => CartScreen(seller: s.uri.queryParameters['seller'])),
+      GoRoute(path: '/market/hub', builder: (_, s) => MarketHubScreen(tab: s.uri.queryParameters['tab'])),
+      GoRoute(path: '/market/diagnostics', builder: (_, _) => const DeviceCheckScreen()),
+      GoRoute(
+        path: '/market/sell/:kind',
+        builder: (_, s) => SellScreen(kind: s.pathParameters['kind']!, id: s.uri.queryParameters['id']),
+      ),
+      GoRoute(
+        path: '/market/r/:kind/:id',
+        builder: (_, s) => DealScreen(kind: s.pathParameters['kind']!, id: s.pathParameters['id']!),
+      ),
+      GoRoute(path: '/market/task/:id', redirect: (_, s) => '/market/r/task/${s.pathParameters['id']}'),
       GoRoute(path: '/dev', builder: (_, _) => const DevScreen()),
       GoRoute(path: '/calls', builder: (_, _) => const CallLogScreen()),
       GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),
@@ -252,6 +274,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/backup', builder: (_, _) => const BackupScreen()),
       GoRoute(path: '/files', builder: (_, _) => const FilesScreen()),
       GoRoute(path: '/bookmarks', builder: (_, _) => const BookmarksScreen()),
+      GoRoute(path: '/tag/:tag', builder: (_, s) => TagScreen(tag: s.pathParameters['tag']!)),
       GoRoute(path: '/activity', builder: (_, _) => const ActivityScreen()),
       GoRoute(path: '/drafts', builder: (_, _) => const DraftsScreen()),
       GoRoute(

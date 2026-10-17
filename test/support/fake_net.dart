@@ -36,6 +36,9 @@ class TestNetwork {
 
   /// topic -> node ids that joined it, for in-process gossip.
   final topics = <String, Set<String>>{};
+
+  /// Store and serve blobs from a folder per node, like the native node.
+  bool blobs = false;
   Completer<bool>? sendGate;
   final sendGates = <String, Completer<bool>>{};
 }
@@ -48,6 +51,7 @@ class TestTransport implements Transport, MediaLink {
   final String id;
   bool online = true;
   bool started = false;
+  String _blobDir = '';
   final controller = StreamController<NetEvent>.broadcast();
   @override
   void setPreferredRelay(String? url) {}
@@ -60,6 +64,8 @@ class TestTransport implements Transport, MediaLink {
     required String dataDir,
     required String blobDir,
   }) async {
+    _blobDir = blobDir;
+    if (network.blobs) Directory(blobDir).createSync(recursive: true);
     started = true;
   }
 
@@ -208,13 +214,31 @@ class TestTransport implements Transport, MediaLink {
     return any;
   }
   @override
-  Future<String> importBlob(String path) async => throw UnimplementedError();
+  Future<String> importBlob(String path) async {
+    if (!network.blobs) throw UnimplementedError();
+    final bytes = await File(path).readAsBytes();
+    final hash = toHex(sha256(bytes));
+    final dest = File('$_blobDir/$hash');
+    if (!dest.existsSync()) await dest.writeAsBytes(bytes, flush: true);
+    await File(path).delete();
+    return hash;
+  }
+
   @override
-  Future<bool> fetchBlob(String hash, String peer) async => false;
+  Future<bool> fetchBlob(String hash, String peer) async {
+    if (!network.blobs || !online) return false;
+    final other = network.nodes[peer];
+    if (other == null || !other.online || !other.started) return false;
+    final src = File(other.blobPath(hash));
+    if (!src.existsSync()) return false;
+    await src.copy(blobPath(hash));
+    return true;
+  }
+
   @override
   Future<void> cancelFetch(String hash) async {}
   @override
-  String blobPath(String hash) => '';
+  String blobPath(String hash) => network.blobs ? '$_blobDir/$hash' : '';
 }
 
 Future<void> eventually(bool Function() predicate) async {

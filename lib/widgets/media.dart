@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:pdfrx/pdfrx.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
@@ -770,29 +771,97 @@ class FilePage extends StatefulWidget {
   State<FilePage> createState() => _FilePageState();
 }
 
+enum _Viewer { image, video, audio, pdf, table, text, none }
+
 class _FilePageState extends State<FilePage> {
   String? _text;
-  final _player = AudioPlayer();
+  List<List<String>>? _rows;
+  bool _tooBig = false;
+  AudioPlayer? _player;
 
-  bool get _audio => widget.mime.startsWith('audio/') || widget.name.toLowerCase().endsWith('.mp3');
-  bool get _visual => widget.mime.startsWith('image/') || widget.mime.startsWith('video/');
-  bool get _textLike => widget.mime.startsWith('text/') ||
-      widget.mime.contains('json') ||
-      widget.name.toLowerCase().endsWith('.md') ||
-      widget.name.toLowerCase().endsWith('.csv');
+  String get _lower => widget.name.toLowerCase();
+
+  _Viewer get _kind {
+    final m = widget.mime;
+    if (m.startsWith('image/')) return _Viewer.image;
+    if (m.startsWith('video/')) return _Viewer.video;
+    if (m.startsWith('audio/') || _lower.endsWith('.mp3') || _lower.endsWith('.m4a')) return _Viewer.audio;
+    if (m.contains('pdf') || _lower.endsWith('.pdf')) return _Viewer.pdf;
+    if (_lower.endsWith('.csv') || m == 'text/csv') return _Viewer.table;
+    if (m.startsWith('text/') || m.contains('json') || m.contains('xml') ||
+        const ['.md', '.txt', '.log', '.yaml', '.yml', '.dart', '.py', '.js', '.ts', '.html', '.css', '.ini', '.toml']
+            .any(_lower.endsWith)) {
+      return _Viewer.text;
+    }
+    return _Viewer.none;
+  }
 
   @override
   void initState() {
     super.initState();
-    if (_textLike && widget.file.lengthSync() < 400 * 1024) {
-      _text = widget.file.readAsStringSync();
+    final kind = _kind;
+    if (kind == _Viewer.text || kind == _Viewer.table) {
+      if (widget.file.lengthSync() > 2 * 1024 * 1024) {
+        _tooBig = true;
+      } else {
+        final raw = widget.file.readAsStringSync();
+        if (kind == _Viewer.table) {
+          _rows = _csv(raw);
+        } else {
+          _text = raw;
+        }
+      }
     }
-    if (_audio) unawaited(_player.setFilePath(widget.file.path));
+    if (kind == _Viewer.audio) {
+      _player = AudioPlayer();
+      unawaited(_player!.setFilePath(widget.file.path));
+    }
+  }
+
+  /// A small CSV reader: quoted fields, escaped quotes, commas or semicolons.
+  static List<List<String>> _csv(String raw) {
+    final sep = raw.split('\n').first.contains(';') && !raw.split('\n').first.contains(',') ? ';' : ',';
+    final rows = <List<String>>[];
+    var row = <String>[];
+    final cell = StringBuffer();
+    var quoted = false;
+    for (var i = 0; i < raw.length; i++) {
+      final ch = raw[i];
+      if (quoted) {
+        if (ch == '"' && i + 1 < raw.length && raw[i + 1] == '"') {
+          cell.write('"');
+          i++;
+        } else if (ch == '"') {
+          quoted = false;
+        } else {
+          cell.write(ch);
+        }
+      } else if (ch == '"') {
+        quoted = true;
+      } else if (ch == sep) {
+        row.add(cell.toString());
+        cell.clear();
+      } else if (ch == '\n' || ch == '\r') {
+        if (ch == '\r' && i + 1 < raw.length && raw[i + 1] == '\n') i++;
+        row.add(cell.toString());
+        cell.clear();
+        rows.add(row);
+        row = <String>[];
+        if (rows.length >= 2000) break;
+      } else {
+        cell.write(ch);
+      }
+    }
+    if (cell.isNotEmpty || row.isNotEmpty) {
+      row.add(cell.toString());
+      rows.add(row);
+    }
+    return rows.where((r) => r.any((c) => c.trim().isNotEmpty)).toList();
   }
 
   @override
   void dispose() {
-    _player.dispose();
+    _player?.dispose();
     super.dispose();
   }
 
@@ -803,43 +872,16 @@ class _FilePageState extends State<FilePage> {
       appBar: AppBar(title: Text(widget.name, overflow: TextOverflow.ellipsis)),
       body: Column(
         children: [
-          Expanded(
-            child: _visual && widget.mime.startsWith('image/')
-                ? InteractiveViewer(child: Image.file(widget.file))
-                : _visual
-                    ? VideoView(file: widget.file)
-                    : _audio
-                        ? Center(
-                            child: FilledButton.icon(
-                              onPressed: () => _player.playing ? _player.pause() : _player.play(),
-                              icon: const Icon(Icons.play_arrow_rounded),
-                              label: const Text('Play'),
-                            ),
-                          )
-                        : _text != null
-                            ? SingleChildScrollView(
-                                padding: const EdgeInsets.all(Space.gutter),
-                                child: SelectableText(_text!, style: Txt.mono(p.ink, size: 12)),
-                              )
-                            : Center(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(Space.gutter),
-                                  child: Text(
-                                    widget.mime.contains('pdf')
-                                        ? 'PDF is ready. Open it with the viewer on this device.'
-                                        : 'This file is on the phone. Open it outside Mentos if you need another app.',
-                                    textAlign: TextAlign.center,
-                                    style: Txt.body(p.muted),
-                                  ),
-                                ),
-                              ),
-          ),
+          Expanded(child: _viewer(p)),
           Padding(
             padding: const EdgeInsets.all(Space.gutter),
             child: Row(
               children: [
                 Expanded(
-                  child: OutlinedButton(onPressed: () => OpenFilex.open(widget.file.path, type: widget.mime), child: const Text('Open')),
+                  child: OutlinedButton(
+                    onPressed: () => OpenFilex.open(widget.file.path, type: widget.mime),
+                    child: const Text('Open in another app'),
+                  ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -852,6 +894,161 @@ class _FilePageState extends State<FilePage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _viewer(Palette p) {
+    if (_tooBig) {
+      return _note(p, Icons.description_outlined, 'This file is too large to preview here.');
+    }
+    switch (_kind) {
+      case _Viewer.image:
+        return InteractiveViewer(maxScale: 6, child: Center(child: Image.file(widget.file)));
+      case _Viewer.video:
+        return VideoView(file: widget.file);
+      case _Viewer.audio:
+        return _AudioPanel(player: _player!, name: widget.name);
+      case _Viewer.pdf:
+        return PdfViewer.file(
+          widget.file.path,
+          params: PdfViewerParams(
+            backgroundColor: p.raised,
+            margin: 12,
+            errorBannerBuilder: (context, error, _, _) =>
+                _note(p, Icons.picture_as_pdf_outlined, 'This PDF could not be shown here. Open it in another app.'),
+          ),
+        );
+      case _Viewer.table:
+        final rows = _rows ?? const <List<String>>[];
+        if (rows.isEmpty) return _note(p, Icons.table_chart_outlined, 'This table is empty.');
+        final width = rows.map((r) => r.length).reduce((a, b) => a > b ? a : b);
+        return Scrollbar(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(Space.md),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowColor: WidgetStatePropertyAll(p.raised),
+                columns: [
+                  for (var i = 0; i < width; i++)
+                    DataColumn(label: Text(i < rows.first.length ? rows.first[i] : '', style: Txt.bodyStrong(p.ink))),
+                ],
+                rows: [
+                  for (final r in rows.skip(1).take(1000))
+                    DataRow(cells: [
+                      for (var i = 0; i < width; i++) DataCell(Text(i < r.length ? r[i] : '', style: Txt.small(p.ink))),
+                    ]),
+                ],
+              ),
+            ),
+          ),
+        );
+      case _Viewer.text:
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(Space.gutter),
+          child: SelectableText(_text ?? '', style: Txt.mono(p.ink, size: 12)),
+        );
+      case _Viewer.none:
+        return _note(p, Icons.insert_drive_file_outlined,
+            'There is no preview for this kind of file. Open it in another app.');
+    }
+  }
+
+  Widget _note(Palette p, IconData icon, String text) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(Space.gutter),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 40, color: p.faint),
+          const SizedBox(height: Space.md),
+          Text(text, textAlign: TextAlign.center, style: Txt.body(p.muted)),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Play, pause and seek for an audio file.
+class _AudioPanel extends StatelessWidget {
+  const _AudioPanel({required this.player, required this.name});
+  final AudioPlayer player;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Space.xl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 120,
+              height: 120,
+              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(32)),
+              child: Icon(Icons.graphic_eq_rounded, size: 56, color: p.accent),
+            ),
+            const SizedBox(height: Space.lg),
+            Text(name, textAlign: TextAlign.center, style: Txt.heading(p.ink)),
+            const SizedBox(height: Space.lg),
+            StreamBuilder<Duration>(
+              stream: player.positionStream,
+              builder: (context, snap) {
+                final pos = snap.data ?? Duration.zero;
+                final total = player.duration ?? Duration.zero;
+                final max = total.inMilliseconds <= 0 ? 1.0 : total.inMilliseconds.toDouble();
+                return Column(
+                  children: [
+                    Slider(
+                      value: pos.inMilliseconds.clamp(0, max.toInt()).toDouble(),
+                      max: max,
+                      onChanged: (v) => player.seek(Duration(milliseconds: v.round())),
+                    ),
+                    Row(
+                      children: [
+                        Text(duration(pos.inMilliseconds), style: Txt.mono(p.muted, size: 11)),
+                        const Spacer(),
+                        Text(duration(total.inMilliseconds), style: Txt.mono(p.muted, size: 11)),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: Space.md),
+            StreamBuilder<PlayerState>(
+              stream: player.playerStateStream,
+              builder: (context, snap) {
+                final playing = snap.data?.playing ?? false;
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      iconSize: 32,
+                      onPressed: () => player.seek((player.position) - const Duration(seconds: 10)),
+                      icon: const Icon(Icons.replay_10_rounded),
+                    ),
+                    const SizedBox(width: Space.md),
+                    IconButton.filled(
+                      iconSize: 40,
+                      onPressed: () => playing ? player.pause() : player.play(),
+                      icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                    ),
+                    const SizedBox(width: Space.md),
+                    IconButton(
+                      iconSize: 32,
+                      onPressed: () => player.seek(player.position + const Duration(seconds: 10)),
+                      icon: const Icon(Icons.forward_10_rounded),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }

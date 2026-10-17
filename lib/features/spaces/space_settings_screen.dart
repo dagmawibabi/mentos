@@ -85,7 +85,7 @@ class SpaceSettingsScreen extends ConsumerWidget {
             SwitchTile(
               icon: Icons.public_rounded,
               title: 'Public space',
-              subtitle: 'Contacts can see the name and ask to join. The key stays in the invite.',
+              subtitle: 'Listed in the network directory, so anyone can find and join it. Its invite (and key) becomes public.',
               value: s.public,
               onChanged: (v) => e.updateSpace(id, (x) => x.copyWith(public: v)),
             ),

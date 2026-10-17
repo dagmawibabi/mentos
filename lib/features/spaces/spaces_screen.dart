@@ -57,6 +57,11 @@ class SpacesScreen extends ConsumerWidget {
                   label: const Text('Create a space'),
                 ),
                 const SizedBox(height: Space.sm),
+                OutlinedButton.icon(
+                  onPressed: () => context.push('/communities/discover'),
+                  icon: const Icon(Icons.travel_explore_rounded, size: 18),
+                  label: const Text('Discover public spaces'),
+                ),
                 TextButton(
                   onPressed: () => context.push('/connect'),
                   child: Text('I have an invite', style: Txt.bodyStrong(p.muted)),
@@ -75,6 +80,7 @@ class SpacesScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Spaces'),
         actions: [
+          IconBtn(Icons.travel_explore_rounded, tooltip: 'Discover', onTap: () => context.push('/communities/discover')),
           IconBtn(Icons.link_rounded, tooltip: 'Join with invite', onTap: () => context.push('/connect')),
           IconBtn(Icons.add_rounded, tooltip: 'New space', onTap: () => context.push('/new-space')),
           const SizedBox(width: 8),

@@ -58,7 +58,10 @@ class MediaStore {
 
   Future<void> _ensureRoom(int incoming) async {
     final used = await usage();
-    if (used.blobs + incoming > quotaBytes) {
+    // Space rented out to other people is promised separately and does not
+    // count against this person's own media quota.
+    final leased = db.files().where((f) => f.origin == 'lease').fold<int>(0, (s, f) => s + f.size);
+    if (used.blobs - leased + incoming > quotaBytes) {
       throw StateError('This phone is out of room for more files.');
     }
     final free = await _freeBytes();

@@ -121,14 +121,23 @@ impl ProtocolHandler for CallProto {
             else {
                 return Ok(());
             };
-            let mut len = [0u8; 1];
-            if recv.read_exact(&mut len).await.is_err() || len[0] as usize > MAX_ID {
+            // A peer that opens the stream and never names a call must not
+            // hold the connection open forever.
+            let named = tokio::time::timeout(Duration::from_secs(10), async {
+                let mut len = [0u8; 1];
+                recv.read_exact(&mut len).await.ok()?;
+                if len[0] as usize > MAX_ID {
+                    return None;
+                }
+                let mut raw = vec![0u8; len[0] as usize];
+                recv.read_exact(&mut raw).await.ok()?;
+                Some(raw)
+            })
+            .await;
+            let Ok(Some(raw)) = named else {
+                connection.close(1u32.into(), b"no call id");
                 return Ok(());
-            }
-            let mut raw = vec![0u8; len[0] as usize];
-            if recv.read_exact(&mut raw).await.is_err() {
-                return Ok(());
-            }
+            };
             let call_id = String::from_utf8_lossy(&raw).into_owned();
             let ok = valid_id(&call_id)
                 && with_calls(|calls| calls.get(&call_id).is_some_and(|c| c.allowed.contains(&peer)));

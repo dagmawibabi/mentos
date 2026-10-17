@@ -326,13 +326,13 @@ class _StoryViewerState extends ConsumerState<StoryViewer> with SingleTickerProv
                     Row(
                       children: [
                         GestureDetector(
-                          onTap: () => context.push(mine ? '/me' : '/u/${widget.author}'),
+                          onTap: () => mine ? context.go('/me') : context.push('/u/${widget.author}'),
                           child: Avatar(id: widget.author, size: 32, presence: false),
                         ),
                         const SizedBox(width: 10),
                         Expanded(
                           child: GestureDetector(
-                            onTap: () => context.push(mine ? '/me' : '/u/${widget.author}'),
+                            onTap: () => mine ? context.go('/me') : context.push('/u/${widget.author}'),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [

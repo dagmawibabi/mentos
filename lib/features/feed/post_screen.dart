@@ -7,6 +7,7 @@ import '../../data/models.dart';
 import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../net/engine.dart';
 import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
@@ -27,6 +28,7 @@ class _PostScreenState extends ConsumerState<PostScreen> {
   final _c = TextEditingController();
   final _focus = FocusNode();
   CommentView? _replyTo;
+  final _collapsed = <String>{};
 
   @override
   void initState() {
@@ -74,7 +76,7 @@ class _PostScreenState extends ConsumerState<PostScreen> {
           WidgetsBinding.instance.addPostFrameCallback(
             (_) => e.recordView(pv.item),
           );
-          final byId = {for (final c in comments) c.item.id: c};
+          final rows = threadComments(comments, _collapsed);
           final open = e.commentsOpen(pv);
           return Column(
             children: [
@@ -94,17 +96,25 @@ class _PostScreenState extends ConsumerState<PostScreen> {
                         style: Txt.mono(p.faint, size: 10.5),
                       ),
                     ),
-                    for (final c in comments)
+                    for (final row in rows)
                       _CommentTile(
-                        c: c,
-                        parent: c.replyTo == null ? null : byId[c.replyTo],
+                        c: row.c,
+                        depth: row.depth,
+                        replies: row.replies,
+                        collapsed: _collapsed.contains(row.c.item.id),
+                        orphan: row.orphan,
+                        onToggle: row.replies == 0
+                            ? null
+                            : () => setState(() => _collapsed.contains(row.c.item.id)
+                                ? _collapsed.remove(row.c.item.id)
+                                : _collapsed.add(row.c.item.id)),
                         onReply: () {
-                          setState(() => _replyTo = c);
+                          setState(() => _replyTo = row.c);
                           _focus.requestFocus();
                         },
-                        onLike: () => e.like(pv.scope, c.item.id, !c.liked),
-                        onDelete: c.item.author == e.me.id
-                            ? () => e.deleteItem(c.item)
+                        onLike: () => e.like(pv.scope, row.c.item.id, !row.c.liked),
+                        onDelete: row.c.item.author == e.me.id
+                            ? () => e.deleteItem(row.c.item)
                             : null,
                       ),
                     const SizedBox(height: Space.xl),
@@ -209,19 +219,74 @@ class _PostScreenState extends ConsumerState<PostScreen> {
   }
 }
 
+/// One comment in thread order, with how deep it sits and how many replies
+/// hang under it.
+typedef CommentRow = ({CommentView c, int depth, int replies, bool orphan});
+
+/// Orders comments as a tree: each reply right under the comment it answers,
+/// oldest first at every level. Replies to a comment this phone does not
+/// have start their own thread. Collapsed comments hide their whole subtree.
+List<CommentRow> threadComments(List<CommentView> comments, Set<String> collapsed) {
+  final ids = {for (final c in comments) c.item.id};
+  final children = <String?, List<CommentView>>{};
+  for (final c in comments) {
+    final parent = c.replyTo != null && ids.contains(c.replyTo) && c.replyTo != c.item.id ? c.replyTo : null;
+    (children[parent] ??= []).add(c);
+  }
+  for (final list in children.values) {
+    list.sort((a, b) => a.item.ts.compareTo(b.item.ts));
+  }
+  int count(String id, Set<String> seen) {
+    var n = 0;
+    for (final k in children[id] ?? const <CommentView>[]) {
+      if (!seen.add(k.item.id)) continue;
+      n += 1 + count(k.item.id, seen);
+    }
+    return n;
+  }
+
+  final out = <CommentRow>[];
+  final placed = <String>{};
+  void walk(CommentView c, int depth) {
+    if (!placed.add(c.item.id)) return;
+    final replies = count(c.item.id, {c.item.id});
+    out.add((c: c, depth: depth, replies: replies, orphan: depth == 0 && c.replyTo != null));
+    if (collapsed.contains(c.item.id)) return;
+    for (final k in children[c.item.id] ?? const <CommentView>[]) {
+      walk(k, depth + 1);
+    }
+  }
+
+  for (final root in children[null] ?? const <CommentView>[]) {
+    walk(root, 0);
+  }
+  return out;
+}
+
 class _CommentTile extends ConsumerWidget {
   const _CommentTile({
     required this.c,
     required this.onReply,
     required this.onLike,
-    this.parent,
+    this.depth = 0,
+    this.replies = 0,
+    this.collapsed = false,
+    this.orphan = false,
+    this.onToggle,
     this.onDelete,
   });
   final CommentView c;
-  final CommentView? parent;
+  final int depth;
+  final int replies;
+  final bool collapsed;
+  final bool orphan;
+  final VoidCallback? onToggle;
   final VoidCallback onReply;
   final VoidCallback onLike;
   final VoidCallback? onDelete;
+
+  /// Past this depth replies stop moving right, but keep their lines.
+  static const _maxIndent = 5;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -260,26 +325,41 @@ class _CommentTile extends ConsumerWidget {
             danger: true,
           ),
       ]),
-      child: Container(
-        margin: EdgeInsets.only(left: parent == null ? 0 : Space.xl),
-        padding: const EdgeInsets.fromLTRB(
-          Space.gutter,
-          Space.sm,
-          Space.gutter,
-          Space.sm,
-        ),
-        decoration: parent == null
-            ? null
-            : BoxDecoration(
-                border: Border(left: BorderSide(color: p.line, width: 2)),
-              ),
+      child: IntrinsicHeight(
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(width: Space.gutter - 6),
+            // One thread line per ancestor, so every reply visibly hangs
+            // from its root; the nearest one is a shade darker.
+            for (var level = 1; level <= depth.clamp(0, _maxIndent); level++)
+              SizedBox(
+                width: 18,
+                child: Center(
+                  child: Container(
+                    width: 2,
+                    color: level == depth.clamp(0, _maxIndent) ? p.faint.withValues(alpha: .7) : p.line,
+                  ),
+                ),
+              ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, Space.sm, Space.gutter, Space.sm),
+                child: _body(context, ref, p, e, prov),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _body(BuildContext context, WidgetRef ref, Palette p, Engine e, Provenance prov) {
+    return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             GestureDetector(
-              onTap: () => context.push(
-                c.item.author == e.me.id ? '/me' : '/u/${c.item.author}',
-              ),
+              onTap: () => c.item.author == e.me.id ? context.go('/me') : context.push('/u/${c.item.author}'),
               child: Avatar(id: c.item.author, size: 30),
             ),
             const SizedBox(width: 10),
@@ -309,6 +389,8 @@ class _CommentTile extends ConsumerWidget {
                       ],
                     ],
                   ),
+                  if (orphan)
+                    Text('replying to a comment not on this phone', style: Txt.mono(p.faint, size: 10.5)),
                   const SizedBox(height: 2),
                   Text(
                     c.text + (c.edited ? '  (edited)' : ''),
@@ -328,6 +410,18 @@ class _CommentTile extends ConsumerWidget {
                           style: Txt.mono(p.muted, size: 11),
                         ),
                       ),
+                      if (onToggle != null) ...[
+                        const SizedBox(width: Space.md),
+                        GestureDetector(
+                          onTap: onToggle,
+                          child: Text(
+                            collapsed
+                                ? 'Show $replies ${replies == 1 ? 'reply' : 'replies'}'
+                                : 'Hide replies',
+                            style: Txt.mono(p.accent, size: 11),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],
@@ -353,8 +447,6 @@ class _CommentTile extends ConsumerWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
+        );
   }
 }
