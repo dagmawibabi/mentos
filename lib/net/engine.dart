@@ -473,9 +473,11 @@ class Engine {
         s.keepPosts != _settings.keepPosts ||
         s.keepProfile != _settings.keepProfile ||
         s.discoverable != _settings.discoverable;
+    final wallpaperChanged = s.chatWallpaper != _settings.chatWallpaper;
     _settings = s;
     media.quotaBytes = s.quotaMb.clamp(256, 32768) * 1024 * 1024;
     db.setKv('settings', s.encode());
+    if (wallpaperChanged) _emit({Ch.chats});
     if (profileChanged) {
       final p = myProfile;
       unawaited(updateProfile(name: p.name, bio: p.bio, avatar: p.avatar, cover: p.cover));
@@ -3090,6 +3092,29 @@ class Engine {
   void clearChat(String scope) {
     db.deleteChat(scope);
     _mem.removeWhere((_, m) => m.item.e.scope == scope);
+    _emit({Ch.chats, scope});
+  }
+
+  /// Current wallpaper id for [scope], defaulting to the global setting.
+  String chatWallpaper(String scope) {
+    try {
+      final custom = db.getKv('wallpaper:$scope');
+      if (custom != null && custom.isNotEmpty) return custom;
+    } catch (_) {}
+    try {
+      final w = _settings.chatWallpaper;
+      if (w != null && w.isNotEmpty) return w;
+    } catch (_) {}
+    return 'default';
+  }
+
+  /// Sets or clears the per-chat wallpaper for [scope].
+  void setChatWallpaper(String scope, String? wallpaperId) {
+    if (wallpaperId == null || wallpaperId.isEmpty || wallpaperId == 'default') {
+      db.setKv('wallpaper:$scope', '');
+    } else {
+      db.setKv('wallpaper:$scope', wallpaperId);
+    }
     _emit({Ch.chats, scope});
   }
 

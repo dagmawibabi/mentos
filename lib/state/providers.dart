@@ -240,6 +240,33 @@ final unreadChatsProvider = StreamProvider.autoDispose<int>((ref) {
   );
 });
 
+final chatWallpaperProvider = StreamProvider.autoDispose
+    .family<String, String>((ref, scope) {
+      String defaultW;
+      try {
+        defaultW = ref.watch(settingsProvider).chatWallpaper ?? 'default';
+      } catch (_) {
+        defaultW = 'default';
+      }
+      if (defaultW.isEmpty) defaultW = 'default';
+      if (scope.isEmpty) return Stream.value(defaultW);
+      return _ready(
+        ref,
+        defaultW,
+        (e) => e.watch(
+          (k) => _any(k, [scope, Ch.chats]),
+          () {
+            try {
+              final w = e.chatWallpaper(scope);
+              return w.isNotEmpty ? w : defaultW;
+            } catch (_) {
+              return defaultW;
+            }
+          },
+        ),
+      );
+    });
+
 final messagesProvider = StreamProvider.autoDispose
     .family<List<MessageView>, String>((ref, scope) {
       return _ready(

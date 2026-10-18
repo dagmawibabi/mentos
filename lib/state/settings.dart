@@ -29,13 +29,14 @@ class Settings {
     this.xferAutoAccept = false,
     this.xferAutoMaxMb = 50,
     this.xferParallel = 3,
-    this.keepAlive = true,
+    this.keepAlive = false,
     this.accent = 'emerald',
     this.devMode = false,
     this.devLan = false,
     this.devToken = '',
     this.showFeedTab = true,
     this.showWalletTab = true,
+    this.chatWallpaper = 'default',
   });
 
   /// Orbot's HTTP CONNECT proxy.
@@ -121,6 +122,9 @@ class Settings {
   /// Wallet icon in the bottom bar. Settings can still open the wallet.
   final bool showWalletTab;
 
+  /// Default chat wallpaper id or preset ('default', 'mesh', 'blueprint', etc.).
+  final String? chatWallpaper;
+
   /// The options string handed to the native node before it binds.
   Map<String, Object?> get netOptions => {
         'privacy': privacy,
@@ -160,6 +164,7 @@ class Settings {
     String? devToken,
     bool? showFeedTab,
     bool? showWalletTab,
+    String? chatWallpaper,
   }) =>
       Settings(
         themeMode: themeMode ?? this.themeMode,
@@ -194,6 +199,7 @@ class Settings {
         devToken: devToken ?? this.devToken,
         showFeedTab: showFeedTab ?? this.showFeedTab,
         showWalletTab: showWalletTab ?? this.showWalletTab,
+        chatWallpaper: chatWallpaper ?? this.chatWallpaper ?? 'default',
       );
 
   String encode() => jsonEncode({
@@ -229,6 +235,7 @@ class Settings {
         'devTok': devToken,
         'navFeed': showFeedTab,
         'navWallet': showWalletTab,
+        'wallpaper': chatWallpaper ?? 'default',
       });
 
   static Settings decode(String? s) {
@@ -261,13 +268,14 @@ class Settings {
         xferAutoAccept: j['xa'] == true,
         xferAutoMaxMb: ((j['xmax'] as num?)?.toInt() ?? 50).clamp(1, 4096),
         xferParallel: ((j['xpar'] as num?)?.toInt() ?? 3).clamp(1, 8),
-        keepAlive: j['bg'] is bool ? j['bg'] as bool : true,
+        keepAlive: j['bg'] is bool ? j['bg'] as bool : false,
         accent: const {'emerald', 'blue', 'amber', 'ink'}.contains(j['accent']) ? j['accent'] as String : 'emerald',
         devMode: j['dev'] == true,
         devLan: j['devLan'] == true,
         devToken: j['devTok'] is String ? j['devTok'] as String : '',
         showFeedTab: j['navFeed'] != false,
         showWalletTab: j['navWallet'] != false,
+        chatWallpaper: (j['wallpaper'] as String?) ?? 'default',
       );
     } catch (_) {
       return const Settings();

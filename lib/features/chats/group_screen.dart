@@ -11,6 +11,7 @@ import '../../state/providers.dart';
 import '../../widgets/tech.dart';
 import '../../widgets/ui.dart';
 import 'chat_view.dart';
+import 'chat_wallpaper.dart';
 
 class GroupChatScreen extends ConsumerWidget {
   const GroupChatScreen({super.key, required this.id});
@@ -66,6 +67,12 @@ class GroupChatScreen extends ConsumerWidget {
     showActions(context, [
       SheetAction(Icons.groups_outlined, 'Members and roles', () => context.push('/g/${g.id}/info')),
       SheetAction(Icons.info_outline_rounded, 'Technical details', () => showScopeTech(context, Scope.gdm(g.id), groupId: g.id)),
+      SheetAction(
+        Icons.wallpaper_rounded,
+        'Chat wallpaper',
+        () => showWallpaperPicker(context, scope: Scope.gdm(g.id)),
+        subtitle: wallpaperName(e.chatWallpaper(Scope.gdm(g.id))),
+      ),
       SheetAction(g.preserve ? Icons.cloud_done_rounded : Icons.cloud_outlined,
           g.preserve ? 'Stop keeping history' : 'Keep history on this phone', () {
         e.updateGroup(g.id, (x) => x.copyWith(preserve: !x.preserve));

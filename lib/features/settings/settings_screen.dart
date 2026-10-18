@@ -12,10 +12,10 @@ import '../../state/session.dart';
 import '../../widgets/avatar.dart';
 import '../../net/market/market.dart';
 import '../../net/pay/coin.dart';
-import '../../widgets/input_sheet.dart';
 import '../wallet/coin_wallet_screen.dart';
 import '../../widgets/ui.dart';
 import '../../core/pin.dart';
+import '../chats/chat_wallpaper.dart';
 
 /// Settings, by topic. Each topic opens its own page so this one stays short.
 class SettingsScreen extends ConsumerWidget {
@@ -379,6 +379,14 @@ class AppearanceSettings extends ConsumerWidget {
         child: _AccentPicker(value: s.accent, onChanged: (v) => n.update((x) => x.copyWith(accent: v))),
       ),
       const SizedBox(height: Space.md),
+      SectionLabel('Wallpaper'),
+      RowTile(
+        icon: Icons.wallpaper_rounded,
+        title: 'Chat wallpaper',
+        subtitle: wallpaperName(s.chatWallpaper),
+        onTap: () => showWallpaperPicker(context),
+      ),
+      const SizedBox(height: Space.md),
       SwitchTile(
         icon: Icons.animation_rounded,
         title: 'Reduce motion',
@@ -491,6 +499,12 @@ class ChatSettings extends ConsumerWidget {
         title: 'Default disappearing timer',
         subtitle: ttlLabel(s.defaultTtl),
         onTap: () => _ttl(context, ref),
+      ),
+      RowTile(
+        icon: Icons.wallpaper_rounded,
+        title: 'Chat wallpaper',
+        subtitle: wallpaperName(s.chatWallpaper),
+        onTap: () => showWallpaperPicker(context),
       ),
     ]);
   }
@@ -799,10 +813,11 @@ Future<void> _ttl(BuildContext context, WidgetRef ref) async {
       ),
     ),
   );
-  if (v != null)
+  if (v != null) {
     ref
         .read(settingsProvider.notifier)
         .update((x) => x.copyWith(defaultTtl: v));
+  }
 }
 
 Future<void> _quota(BuildContext context, WidgetRef ref) async {
@@ -826,8 +841,9 @@ Future<void> _quota(BuildContext context, WidgetRef ref) async {
       ),
     ),
   );
-  if (v != null)
+  if (v != null) {
     ref.read(settingsProvider.notifier).update((x) => x.copyWith(quotaMb: v));
+  }
 }
 
 Future<void> _lockAfter(BuildContext context, WidgetRef ref) async {
@@ -851,10 +867,11 @@ Future<void> _lockAfter(BuildContext context, WidgetRef ref) async {
       ),
     ),
   );
-  if (v != null)
+  if (v != null) {
     ref
         .read(settingsProvider.notifier)
         .update((x) => x.copyWith(lockAfter: v));
+  }
 }
 
 Future<void> _pin(BuildContext context, WidgetRef ref) async {

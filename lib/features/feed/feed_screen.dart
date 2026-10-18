@@ -55,6 +55,36 @@ class FeedScreen extends ConsumerWidget {
                   const MentosMark(size: 22),
                   const SizedBox(width: 10),
                   Text('Feed', style: Txt.title(p.ink)),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: (net?.links.isNotEmpty ?? false)
+                          ? p.accent.withValues(alpha: .15)
+                          : p.muted.withValues(alpha: .1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: (net?.links.isNotEmpty ?? false) ? p.accent : p.muted,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          (net?.links.isNotEmpty ?? false) ? 'P2P Online' : 'Local Node',
+                          style: Txt.label(
+                            (net?.links.isNotEmpty ?? false) ? p.accent : p.muted,
+                          ).copyWith(fontSize: 10, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
               actions: [
