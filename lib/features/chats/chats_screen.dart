@@ -503,3 +503,4 @@ class _ChatRow extends ConsumerWidget {
     );
   }
 }
+

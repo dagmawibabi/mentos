@@ -182,6 +182,12 @@ class _MarkPainter extends CustomPainter {
     canvas.drawLine(b, c, line);
     canvas.drawCircle(a, r, Paint()..color = p.ink);
     canvas.drawCircle(c, r, Paint()..color = p.ink);
+
+    // Glowing aura for the live node
+    final glow = Paint()
+      ..color = p.accent.withValues(alpha: .32)
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, r * .75);
+    canvas.drawCircle(b, r * 1.6, glow);
     canvas.drawCircle(b, r, Paint()..color = p.accent);
   }
 

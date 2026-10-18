@@ -10,6 +10,7 @@ import '../../net/views.dart';
 import '../../state/providers.dart';
 import '../../widgets/ui.dart';
 import 'bubble.dart';
+import 'chat_wallpaper.dart';
 import 'composer.dart';
 import 'delivery_window.dart';
 
@@ -46,16 +47,44 @@ class _ChatViewState extends ConsumerState<ChatView>
   final _keys = <String, GlobalKey>{};
   final _scroll = ScrollController();
   bool _visible = true;
+  bool _showScrollBottom = false;
+  int _unreadBelow = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scroll.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    final show = _scroll.hasClients && _scroll.offset > 60;
+    if (show != _showScrollBottom && mounted) {
+      setState(() {
+        _showScrollBottom = show;
+        if (!show) {
+          _unreadBelow = 0;
+          ref.read(engineProvider).markRead(widget.scope);
+        }
+      });
+    }
+  }
+
+  void _scrollToBottom() {
+    HapticFeedback.lightImpact();
+    setState(() => _unreadBelow = 0);
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutCubic,
+    );
+    ref.read(engineProvider).markRead(widget.scope);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
   }
@@ -330,8 +359,16 @@ class _ChatViewState extends ConsumerState<ChatView>
     final typing = {...?ref.watch(typingProvider(widget.scope)).value}
       ..remove(e.me.id);
 
-    ref.listen(messagesProvider(widget.scope), (_, _) {
-      if (_visible) {
+    ref.listen(messagesProvider(widget.scope), (prev, next) {
+      final prevList = prev?.value ?? const <MessageView>[];
+      final nextList = next.value ?? const <MessageView>[];
+      if (_showScrollBottom && nextList.length > prevList.length) {
+        final newMsgs = nextList.sublist(prevList.length);
+        final incoming = newMsgs.where((m) => !m.mine).length;
+        if (incoming > 0 && mounted) {
+          setState(() => _unreadBelow += incoming);
+        }
+      } else if (_visible) {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => e.markRead(widget.scope),
         );
@@ -354,86 +391,188 @@ class _ChatViewState extends ConsumerState<ChatView>
       children: [
         ?widget.banner,
         Expanded(
-          child: msgs.isEmpty
-              ? EmptyState(
-                  icon: Icons.lock_outline_rounded,
-                  title: widget.emptyTitle,
-                  body: widget.emptyBody,
-                )
-              : ListView.builder(
-                  controller: _scroll,
-                  reverse: true,
-                  padding: const EdgeInsets.only(
-                    top: Space.md,
-                    bottom: Space.sm,
-                  ),
-                  itemCount: rows.length + 1,
-                  itemBuilder: (_, idx) {
-                    if (idx == 0) {
-                      return AnimatedSize(
-                        duration: Motion.base,
-                        child: typing.isEmpty
-                            ? const SizedBox(width: double.infinity)
-                            : Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  Space.gutter,
-                                  6,
-                                  Space.gutter,
-                                  4,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: ChatWallpaperBackground(
+                  scope: widget.scope,
+                  child: msgs.isEmpty
+                    ? EmptyState(
+                        icon: Icons.lock_outline_rounded,
+                        title: widget.emptyTitle,
+                        body: widget.emptyBody,
+                      )
+                    : ListView.builder(
+                        controller: _scroll,
+                        reverse: true,
+                        padding: const EdgeInsets.only(
+                          top: Space.md,
+                          bottom: Space.sm,
+                        ),
+                        itemCount: rows.length + 1,
+                        itemBuilder: (_, idx) {
+                          if (idx == 0) {
+                            return AnimatedSize(
+                              duration: Motion.base,
+                              child: typing.isEmpty
+                                  ? const SizedBox(width: double.infinity)
+                                  : Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        Space.gutter,
+                                        6,
+                                        Space.gutter,
+                                        4,
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          TypingDots(color: p.accent),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            widget.group
+                                                ? '${typing.map(e.nameOf).take(2).join(', ')} typing'
+                                                : 'typing',
+                                            style: Txt.mono(p.muted, size: 11),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                            );
+                          }
+                          final row = rows[idx - 1];
+                          if (row is String) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: Space.md),
+                              child: Center(
+                                child: Text(
+                                  row.toUpperCase(),
+                                  style: Txt.label(p.faint),
                                 ),
-                                child: Row(
-                                  children: [
-                                    TypingDots(color: p.accent),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      widget.group
-                                          ? '${typing.map(e.nameOf).take(2).join(', ')} typing'
-                                          : 'typing',
-                                      style: Txt.mono(p.muted, size: 11),
+                              ),
+                            );
+                          }
+                          final i = row as int;
+                          final m = msgs[i];
+                          final prev = i > 0 ? msgs[i - 1] : null;
+                          final next = i < msgs.length - 1 ? msgs[i + 1] : null;
+                          bool same(MessageView? a, MessageView b) =>
+                              a != null &&
+                              a.author == b.author &&
+                              (a.ts - b.ts).abs() < 180000 &&
+                              dayLabel(a.ts) == dayLabel(b.ts);
+                          final key = anchor[i] ?? ValueKey('dup-$i-${m.id}');
+                          return KeyedSubtree(
+                            key: key,
+                            child: Bubble(
+                              m: m,
+                              scope: widget.scope,
+                              firstInGroup: !same(prev, m),
+                              lastInGroup: !same(next, m),
+                              showAuthor: widget.group,
+                              highlight: _highlight == m.id,
+                              onLongPress: () => _actions(m),
+                              onReply: () => setState(() => _replyTo = m),
+                              onTapReply: () => _jumpTo(m.replyTo),
+                            ),
+                          );
+                        },
+                      ),
+                ),
+              ),
+              Positioned(
+                right: Space.gutter,
+                bottom: 12,
+                child: IgnorePointer(
+                  ignoring: !_showScrollBottom,
+                  child: AnimatedScale(
+                    scale: _showScrollBottom ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutBack,
+                    child: AnimatedOpacity(
+                      opacity: _showScrollBottom ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              onTap: _scrollToBottom,
+                              customBorder: const CircleBorder(),
+                              child: Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: p.surface,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: p.line.withValues(alpha: 0.6),
+                                    width: 1.0,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(
+                                        alpha: p.isDark ? 0.35 : 0.12,
+                                      ),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 3),
                                     ),
                                   ],
                                 ),
+                                child: Center(
+                                  child: Icon(
+                                    Icons.keyboard_arrow_down_rounded,
+                                    size: 26,
+                                    color: p.ink,
+                                  ),
+                                ),
                               ),
-                      );
-                    }
-                    final row = rows[idx - 1];
-                    if (row is String) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: Space.md),
-                        child: Center(
-                          child: Text(
-                            row.toUpperCase(),
-                            style: Txt.label(p.faint),
+                            ),
                           ),
-                        ),
-                      );
-                    }
-                    final i = row as int;
-                    final m = msgs[i];
-                    final prev = i > 0 ? msgs[i - 1] : null;
-                    final next = i < msgs.length - 1 ? msgs[i + 1] : null;
-                    bool same(MessageView? a, MessageView b) =>
-                        a != null &&
-                        a.author == b.author &&
-                        (a.ts - b.ts).abs() < 180000 &&
-                        dayLabel(a.ts) == dayLabel(b.ts);
-                    final key = anchor[i] ?? ValueKey('dup-$i-${m.id}');
-                    return KeyedSubtree(
-                      key: key,
-                      child: Bubble(
-                        m: m,
-                        scope: widget.scope,
-                        firstInGroup: !same(prev, m),
-                        lastInGroup: !same(next, m),
-                        showAuthor: widget.group,
-                        highlight: _highlight == m.id,
-                        onLongPress: () => _actions(m),
-                        onReply: () => setState(() => _replyTo = m),
-                        onTapReply: () => _jumpTo(m.replyTo),
+                          if (_unreadBelow > 0)
+                            Positioned(
+                              top: -4,
+                              right: -4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 5,
+                                  vertical: 2,
+                                ),
+                                constraints: const BoxConstraints(
+                                  minWidth: 18,
+                                  minHeight: 18,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: p.accent,
+                                  borderRadius: BorderRadius.circular(10),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.25),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 1),
+                                    ),
+                                  ],
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  _unreadBelow > 99 ? '99+' : '$_unreadBelow',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    height: 1.1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
-                    );
-                  },
+                    ),
+                  ),
                 ),
+              ),
+            ],
+          ),
         ),
         Composer(
           scope: widget.scope,

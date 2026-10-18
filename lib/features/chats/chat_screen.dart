@@ -16,6 +16,7 @@ import '../../widgets/avatar.dart';
 import '../../widgets/tech.dart';
 import '../../widgets/ui.dart';
 import 'chat_view.dart';
+import 'chat_wallpaper.dart';
 
 class ChatScreen extends ConsumerWidget {
   const ChatScreen({super.key, required this.peer});
@@ -138,6 +139,12 @@ class ChatScreen extends ConsumerWidget {
         'Disappearing messages',
         () => _ttl(context, ref, scope),
         subtitle: ttlLabel(ttl),
+      ),
+      SheetAction(
+        Icons.wallpaper_rounded,
+        'Chat wallpaper',
+        () => showWallpaperPicker(context, scope: scope),
+        subtitle: wallpaperName(e.chatWallpaper(scope)),
       ),
       SheetAction(
         chat['pinned'] == 1 ? Icons.push_pin_rounded : Icons.push_pin_outlined,

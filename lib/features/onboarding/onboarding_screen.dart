@@ -118,7 +118,41 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const MentosMark(size: 32),
+          Row(
+            children: [
+              const MentosMark(size: 34),
+              const SizedBox(width: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: p.accent.withValues(alpha: .12),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: p.accent.withValues(alpha: .3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: p.accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'P2P · Encrypted · Serverless',
+                      style: Txt.label(p.accent).copyWith(
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: .3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           const Spacer(),
           Text('Your social life,\nheld in your hand.', style: Txt.display(p.ink).copyWith(fontSize: 34)),
           const SizedBox(height: Space.lg),

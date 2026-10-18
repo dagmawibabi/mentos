@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -370,6 +371,11 @@ class Bubble extends ConsumerWidget {
             Flexible(
               child: GestureDetector(
                 onLongPress: onLongPress,
+                onDoubleTap: () {
+                  HapticFeedback.lightImpact();
+                  final current = m.reactions[e.me.id];
+                  e.react(scope, m.id, current == '❤️' ? null : '❤️');
+                },
                 child: Column(
                   crossAxisAlignment: mine
                       ? CrossAxisAlignment.end
