@@ -10,11 +10,13 @@ import '../../net/pay/coin.dart';
 import '../../state/calls.dart';
 import '../../state/providers.dart';
 import '../../widgets/ui.dart';
+import '../plugins/plugins_screen.dart';
+import '../../plugins/plugin_providers.dart';
 import '../wallet/coin_wallet_screen.dart';
 import 'market_cards.dart';
 import 'market_kit.dart';
 
-enum MarketTab { shop, tasks, exchange, resources, ads, plugins }
+enum MarketTab { plugins, tasks, exchange, resources, ads, shop }
 
 extension on MarketTab {
   String get label => switch (this) {
@@ -38,7 +40,7 @@ extension on MarketTab {
 /// The marketplace: one place for goods, work, ads, spare phone capacity,
 /// Mentos-for-birr trades and plugins, all paid through escrow.
 class MarketScreen extends ConsumerStatefulWidget {
-  const MarketScreen({super.key, this.initial = MarketTab.shop});
+  const MarketScreen({super.key, this.initial = MarketTab.plugins});
   final MarketTab initial;
 
   @override
@@ -78,7 +80,7 @@ class _MarketScreenState extends ConsumerState<MarketScreen> {
               const SizedBox(width: 8),
             ],
           ),
-          const SliverToBoxAdapter(child: _EscrowBanner()),
+          if (!ref.watch(pluginLayoutProvider).hide.contains('marketBanner')) const SliverToBoxAdapter(child: _EscrowBanner()),
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, 0),
@@ -114,9 +116,7 @@ class _MarketScreenState extends ConsumerState<MarketScreen> {
           const SliverToBoxAdapter(child: SizedBox(height: 96)),
         ],
       ),
-      floatingActionButton: _tab == MarketTab.plugins
-          ? null
-          : FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton.extended(
               heroTag: 'market-sell',
               onPressed: () => context.push('/market/sell/${_sellKind()}'),
               icon: const Icon(Icons.add_rounded),
@@ -126,7 +126,7 @@ class _MarketScreenState extends ConsumerState<MarketScreen> {
                 MarketTab.exchange => 'New offer',
                 MarketTab.resources => 'Offer this phone',
                 MarketTab.ads => 'Promote',
-                MarketTab.plugins => '',
+                MarketTab.plugins => 'List a plugin',
               }),
             ),
     );
@@ -417,8 +417,9 @@ class _MarketScreenState extends ConsumerState<MarketScreen> {
             ),
           ),
         ),
+      SliverToBoxAdapter(child: _SandboxCard(market: m)),
       const SliverToBoxAdapter(
-        child: MHeader('Phones for rent', subtitle: 'Encrypted storage you can audit, and compute you verify before paying'),
+        child: MHeader('Devices for rent', subtitle: 'Encrypted storage you can audit, compute you verify, and sandboxes by the hour'),
       ),
       if (providers.isEmpty)
         _empty('Nobody is renting yet', 'Run diagnostics and offer part of this phone.', icon: Icons.memory_rounded)
@@ -531,62 +532,102 @@ class _MarketScreenState extends ConsumerState<MarketScreen> {
     m.setAds(interests: text.split(',').map((t) => t.trim()).where((t) => t.isNotEmpty).toList());
   }
 
-  List<Widget> _plugins(Market m, String q) {
-    final e = ref.watch(engineProvider);
-    final listed = _find(m, Kinds.plugin, q);
-    return [
-      const SliverToBoxAdapter(
-        child: MHeader('Plugins', subtitle: 'Sticker, phrase and accent packs. Packs are data; none of them run code.'),
-      ),
-      for (final pack in Market.starterPacks)
-        if (q.isEmpty || '${pack['title']} ${pack['about']}'.toLowerCase().contains(q))
-          SliverToBoxAdapter(
-            child: PackCard(
-              title: pack['title'] as String,
-              about: pack['about'] as String,
-              kind: pack['plugin'] as String,
-              pack: pack['pack'] as Map,
-              price: 0,
-              installed: e.pluginInstalled(pack['id'] as String),
-              onTap: () => _toggleStarter(pack),
-            ),
-          ),
-      for (final l in listed)
-        SliverToBoxAdapter(
-          child: PackCard(
-            title: l.title,
-            about: l.about,
-            kind: '${l.body['plugin']}',
-            pack: (l.body['pack'] as Map?) ?? const {},
-            price: l.price,
-            installed: e.pluginInstalled(l.id),
-            onTap: () => openListing(context, l),
-          ),
-        ),
-      SliverToBoxAdapter(
-        child: Padding(
-          padding: const EdgeInsets.all(Space.gutter),
-          child: OutlinedButton.icon(
-            onPressed: () => context.push('/market/sell/plugin'),
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Publish a pack'),
-          ),
-        ),
-      ),
-    ];
-  }
+  List<Widget> _plugins(Market m, String q) => [SliverToBoxAdapter(child: PluginStore(query: q))];
+}
 
-  Future<void> _toggleStarter(Map<String, dynamic> pack) async {
-    final e = ref.read(engineProvider);
-    final id = pack['id'] as String;
-    if (e.pluginInstalled(id)) {
-      e.removePlugin(id);
-      toast(context, 'Removed');
-    } else {
-      await attempt(context, () => e.installPlugin({...pack, 'body': pack['pack'], 'minor': 0, 'from': ''}),
-          done: 'Installed');
-    }
-    setState(() {});
+/// Sandboxes: try one free, or reopen one you rent or host.
+class _SandboxCard extends StatelessWidget {
+  const _SandboxCard({required this.market});
+  final Market market;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final mc = MarketColors(p);
+    final mine = market.boxes().where((r) => market.boxStage(r) != 'ended' && market.boxStage(r) != 'cancelled').toList()
+      ..sort((a, b) => (b['start'] as int).compareTo(a['start'] as int));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
+      child: Container(
+        padding: const EdgeInsets.all(Space.lg),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          gradient: LinearGradient(colors: [mc.violetSoft, p.surface], begin: Alignment.topLeft, end: Alignment.bottomRight),
+          border: Border.all(color: p.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.terminal_rounded, color: mc.violet),
+                const SizedBox(width: Space.sm),
+                Expanded(child: Text('Sandboxes', style: Txt.heading(p.ink))),
+                if (mine.isNotEmpty) Text('${mine.length} open', style: Txt.mono(mc.violet, size: 12, w: FontWeight.w500)),
+              ],
+            ),
+            const SizedBox(height: Space.sm),
+            Text(
+              'Rent a workspace on someone\'s device by the hour: upload files, run scripts and keep results there. '
+              'Or offer this phone as one and earn while it\'s idle.',
+              style: Txt.small(p.inkSoft),
+            ),
+            for (final r in mine.take(4))
+              Padding(
+                padding: const EdgeInsets.only(top: Space.sm),
+                child: Material(
+                  color: p.surface,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => context.push('/market/box/${r['bid']}'),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(switch (r['role']) {
+                            'demo' => Icons.science_outlined,
+                            'provider' => Icons.dns_outlined,
+                            _ => Icons.terminal_rounded,
+                          }, size: 18, color: mc.violet),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              switch (r['role']) {
+                                'demo' => 'Demo sandbox',
+                                'provider' => 'Hosting for ${market.engine.nameOf(r['renter'] as String)}',
+                                _ => 'Sandbox on ${market.engine.nameOf(r['provider'] as String)}',
+                              },
+                              style: Txt.body(p.ink),
+                            ),
+                          ),
+                          Pill(market.boxStage(r), fg: mc.violet, bg: mc.violetSoft),
+                          Icon(Icons.chevron_right_rounded, color: p.faint),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            const SizedBox(height: Space.md),
+            Wrap(
+              spacing: Space.sm,
+              runSpacing: Space.sm,
+              children: [
+                FilledButton.icon(
+                  onPressed: () {
+                    final r = market.startDemoBox();
+                    context.push('/market/box/${r['bid']}');
+                  },
+                  icon: const Icon(Icons.science_outlined, size: 18),
+                  label: const Text('Try the free demo'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

@@ -20,10 +20,14 @@ import '../features/chats/group_screen.dart';
 import '../features/chats/new_group_screen.dart';
 import '../features/files/files_screen.dart';
 import '../features/files/transfer_screen.dart';
+import '../features/network/atlas_screen.dart';
+import '../features/plugins/plugins_screen.dart';
+import '../features/market/box_screen.dart';
+import '../features/ai/ai_chat_screen.dart';
+import '../features/network/custody_screen.dart';
 import '../features/network/diagnostics_screen.dart';
 import '../features/network/network_screen.dart';
 import '../features/network/node_screen.dart';
-import '../features/network/privacy_screen.dart';
 import '../features/onboarding/onboarding_screen.dart';
 import '../features/profile/edit_profile_screen.dart';
 import '../features/profile/insights_screen.dart';
@@ -235,7 +239,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/market',
         builder: (_, s) => MarketScreen(
-          initial: MarketTab.values.where((t) => t.name == s.uri.queryParameters['tab']).firstOrNull ?? MarketTab.shop,
+          initial: MarketTab.values.where((t) => t.name == s.uri.queryParameters['tab']).firstOrNull ?? MarketTab.plugins,
         ),
       ),
       GoRoute(path: '/market/l/:id', builder: (_, s) => ListingScreen(id: s.pathParameters['id']!)),
@@ -250,8 +254,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/market/r/:kind/:id',
         builder: (_, s) => DealScreen(kind: s.pathParameters['kind']!, id: s.pathParameters['id']!),
       ),
+      GoRoute(path: '/market/box/:bid', builder: (_, s) => BoxScreen(bid: s.pathParameters['bid']!)),
       GoRoute(path: '/market/task/:id', redirect: (_, s) => '/market/r/task/${s.pathParameters['id']}'),
       GoRoute(path: '/dev', builder: (_, _) => const DevScreen()),
+      GoRoute(path: '/ai', builder: (_, s) => AiChatScreen(conversation: s.uri.queryParameters['c'])),
+      GoRoute(path: '/plugins', builder: (_, _) => const PluginsScreen()),
+      GoRoute(path: '/plugins/:id', builder: (_, s) => PluginDetailScreen(id: s.pathParameters['id']!)),
+      GoRoute(
+        path: '/plugins/:id/page/:page',
+        builder: (_, s) => PluginPageScreen(plugin: s.pathParameters['id']!, page: s.pathParameters['page']!),
+      ),
       GoRoute(path: '/calls', builder: (_, _) => const CallLogScreen()),
       GoRoute(path: '/accounts', builder: (_, _) => const AccountsScreen()),
       GoRoute(path: '/channels', builder: (_, _) => const ChannelsScreen()),
@@ -262,9 +274,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/data', builder: (_, _) => const DataExplorerScreen()),
       GoRoute(
         path: '/diagnostics',
-        builder: (_, _) => const DiagnosticsScreen(),
+        builder: (_, s) => DiagnosticsScreen(tab: s.uri.queryParameters['tab']),
       ),
-      GoRoute(path: '/privacy', builder: (_, _) => const PrivacyScreen()),
+      GoRoute(path: '/privacy', redirect: (_, _) => '/diagnostics?tab=privacy'),
+      GoRoute(path: '/atlas', builder: (_, _) => const AtlasScreen()),
+      GoRoute(path: '/custody', builder: (_, _) => const CustodyScreen()),
       GoRoute(
         path: '/node/:id',
         builder: (_, s) => NodeScreen(id: s.pathParameters['id']!),

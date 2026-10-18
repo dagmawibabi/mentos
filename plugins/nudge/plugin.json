@@ -1,0 +1,10 @@
+{
+  "id": "nudge",
+  "name": "Nudge",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "Send a quick nudge to a contact who also has Nudge. Peer to peer, no chat needed. Adds a tab to your bar.",
+  "icon": "bolt",
+  "permissions": ["p2p", "ui", "notify", "storage"],
+  "main": "main.js"
+}

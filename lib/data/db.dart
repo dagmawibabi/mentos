@@ -184,6 +184,13 @@ class Db {
     [k, v],
   );
 
+  void deleteKv(String k) => _db.execute('DELETE FROM kv WHERE k = ?', [k]);
+
+  /// Keys starting with [prefix], for namespaced stores.
+  List<String> kvKeys(String prefix) => [
+    for (final r in _db.select("SELECT k FROM kv WHERE substr(k, 1, ?) = ? ORDER BY k", [prefix.length, prefix])) r['k'] as String,
+  ];
+
   // ---------- items ----------
   bool hasItem(String id) =>
       _db.select('SELECT 1 FROM items WHERE id = ?', [id]).isNotEmpty;
@@ -638,6 +645,9 @@ class Db {
   void markActivitySeen() =>
       _db.execute('UPDATE activity SET seen = 1 WHERE seen = 0');
   void clearActivity() => _db.execute('DELETE FROM activity');
+  void deleteActivity(String id) => _db.execute('DELETE FROM activity WHERE id = ?', [id]);
+  void markOneActivitySeen(String id, bool seen) =>
+      _db.execute('UPDATE activity SET seen = ? WHERE id = ?', [seen ? 1 : 0, id]);
 
   // ---------- chats ----------
   void ensureChat(String scope, {int defaultTtl = 0}) {

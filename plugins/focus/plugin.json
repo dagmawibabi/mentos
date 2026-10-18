@@ -1,0 +1,10 @@
+{
+  "id": "focus",
+  "name": "Focus mode",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "Rearrange Mentos for fewer distractions: hide tabs and stories, go compact, icons only.",
+  "icon": "star",
+  "permissions": ["layout", "ui", "storage"],
+  "main": "main.js"
+}

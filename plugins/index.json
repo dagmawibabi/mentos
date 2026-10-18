@@ -1,0 +1,135 @@
+{
+  "name": "Mentos plugins",
+  "version": 1,
+  "plugins": [
+    {
+      "id": "away",
+      "name": "Away message",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "When you're away, replies once to each person who messages you, with a note you write.",
+      "icon": "away",
+      "permissions": [
+        "messages.read",
+        "messages.send",
+        "storage",
+        "ui",
+        "notify"
+      ],
+      "main": "main.js",
+      "sha256": "caf8c5b42f5949b9a737b85a30529b00df1e6c7163dbf11e7c1b5f2813753aca",
+      "manifest": "away/plugin.json"
+    },
+    {
+      "id": "dice",
+      "name": "Dice",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "Roll dice, flip coins and let chance pick for you, right in any chat.",
+      "icon": "casino",
+      "permissions": [
+        "commands"
+      ],
+      "main": "main.js",
+      "sha256": "8ff56eba1ddde5c18eb6962e0650e69a19fbd44d969e805f3d255979b98432e2",
+      "manifest": "dice/plugin.json"
+    },
+    {
+      "id": "focus",
+      "name": "Focus mode",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "Rearrange Mentos for fewer distractions: hide tabs and stories, go compact, icons only.",
+      "icon": "star",
+      "permissions": [
+        "layout",
+        "ui",
+        "storage"
+      ],
+      "main": "main.js",
+      "sha256": "1ad751f15ef745e66257b6c7d442e2be1e2d6d95e40a6e64ca52b7205417ff82",
+      "manifest": "focus/plugin.json"
+    },
+    {
+      "id": "midnight",
+      "name": "Midnight",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "A deep indigo theme with a violet accent, plus a text size you choose. Pick your own accent on its page.",
+      "icon": "moon",
+      "permissions": [
+        "theme",
+        "storage",
+        "ui"
+      ],
+      "main": "main.js",
+      "sha256": "005222de48d2c0b32fa862b126b796c180c7bb3d42bb38f01af590017bf12b4a",
+      "manifest": "midnight/plugin.json"
+    },
+    {
+      "id": "notes",
+      "name": "Quick notes",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "A private scratchpad page, kept on this device. Type /note in any chat to save a line.",
+      "icon": "note",
+      "permissions": [
+        "storage",
+        "ui",
+        "commands",
+        "notify"
+      ],
+      "main": "main.js",
+      "sha256": "71e6b887d11e39d433938030220cebb983eaddb490e11c399b46f530efcf7d54",
+      "manifest": "notes/plugin.json"
+    },
+    {
+      "id": "nudge",
+      "name": "Nudge",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "Send a quick nudge to a contact who also has Nudge. Peer to peer, no chat needed. Adds a tab to your bar.",
+      "icon": "bolt",
+      "permissions": [
+        "p2p",
+        "ui",
+        "notify",
+        "storage"
+      ],
+      "main": "main.js",
+      "sha256": "a257154b48e8db1df847b0a94a0f50ad35657b85f616b1e6adba64317fbfbb27",
+      "manifest": "nudge/plugin.json"
+    },
+    {
+      "id": "text-tools",
+      "name": "Text tools",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "/shrug, /mock, /upper, /spoiler and friends. Also turns :shortcodes: into emoji as you send.",
+      "icon": "text",
+      "permissions": [
+        "commands",
+        "compose"
+      ],
+      "main": "main.js",
+      "sha256": "43e2e3c50f466105e5fd6b56e14f94e0ea74509bab5cd19bf7a91aed6a8513dc",
+      "manifest": "text-tools/plugin.json"
+    },
+    {
+      "id": "weather",
+      "name": "Weather",
+      "version": "1.0.0",
+      "author": "Mentos",
+      "description": "Live weather at the top of your feed, from Open-Meteo. Pick your city on its page.",
+      "icon": "sun",
+      "permissions": [
+        "net",
+        "ui",
+        "storage"
+      ],
+      "main": "main.js",
+      "sha256": "bf7c1dc3134f9d262d3a23c329ace5ab2e6913d0c99e73dea39fa97187193df4",
+      "manifest": "weather/plugin.json"
+    }
+  ]
+}

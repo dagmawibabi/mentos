@@ -235,8 +235,10 @@ void main() {
       ),
     );
     await render();
-    expect(find.text('Waiting to send'), findsOneWidget);
-    await tester.tap(find.text('Waiting to send'));
+    // The meter is bars and an arrow; its state is spoken, not printed.
+    expect(find.text('Waiting to send'), findsNothing);
+    expect(find.byWidgetPredicate((w) => w is Semantics && (w.properties.label ?? '').startsWith('Waiting to send')), findsWidgets);
+    await tester.tap(find.byKey(ValueKey('delivery-progress:$id')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('Stop retrying'));
@@ -245,8 +247,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await render();
     expect(a.db.deliveries(id).single.state, Delivery.cancelled);
-    expect(find.text('Retries cancelled'), findsOneWidget);
-    await tester.tap(find.text('Retries cancelled'));
+    expect(find.byWidgetPredicate((w) => w is Semantics && (w.properties.label ?? '').startsWith('Retries cancelled')), findsWidgets);
+    await tester.tap(find.byKey(ValueKey('delivery-progress:$id')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.text('Retry'));

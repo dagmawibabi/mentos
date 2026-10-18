@@ -1,0 +1,10 @@
+{
+  "id": "text-tools",
+  "name": "Text tools",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "/shrug, /mock, /upper, /spoiler and friends. Also turns :shortcodes: into emoji as you send.",
+  "icon": "text",
+  "permissions": ["commands", "compose"],
+  "main": "main.js"
+}

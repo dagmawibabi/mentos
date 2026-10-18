@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import '../plugins/plugins_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -7,13 +7,17 @@ import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
+import '../../net/diagnostics.dart';
 import '../../net/transport.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/tech.dart';
 import '../../widgets/ui.dart';
+import 'atlas_screen.dart';
 import 'network_mesh.dart';
 
+/// The live network: who this phone is linked to right now, and the relays
+/// it can go through. Custody, node details and privacy live on their own pages.
 class NetworkScreen extends ConsumerWidget {
   const NetworkScreen({super.key});
 
@@ -23,30 +27,28 @@ class NetworkScreen extends ConsumerWidget {
     final e = ref.watch(maybeEngineProvider);
     if (e == null) return const SizedBox.shrink();
     final status = ref.watch(netStatusProvider).value;
-    final grants = ref.watch(grantsProvider).value ?? const <Grant>[];
+    final diag = ref.watch(diagnosticsProvider).value;
     ref.watch(peopleProvider);
-    final tiers = e.tierCounts();
-    final keptBy = e.keptByAuthor();
+    ref.watch(atlasTickProvider);
     final online = e.onlinePeers.toList();
-    final links = {
-      for (final l in status?.links ?? const <LinkInfo>[]) l.peer: l,
-    };
-
-    final keepers = <String, List<Grant>>{};
-    for (final g in grants.where((g) => g.dir == GrantDir.out)) {
-      keepers.putIfAbsent(g.peer, () => []).add(g);
-    }
-    final preserved = e.people().where((x) => x.preserve).toList();
-    final custody = grants
-        .where((g) => g.dir == GrantDir.inbound && g.state == GrantState.active)
-        .toList();
-    final spacesKept = e
-        .spaces()
-        .where((s) => s.preserve && s.archive)
-        .toList();
-
+    final links = {for (final l in status?.links ?? const <LinkInfo>[]) l.peer: l};
     final running = !e.held && (status?.running ?? false);
     final busy = e.connecting;
+    final direct = links.values.where((l) => l.kind == LinkKind.direct || l.kind == LinkKind.mixed).length;
+
+    final best = diag?.report?.bestLatency ?? const <String, double>{};
+    final atlasRelays = {for (final r in e.atlas?.relays() ?? const []) r.url: r};
+    final urls = <String>{
+      ...best.keys,
+      ...?status?.relays,
+      if (status?.relayUrl != null) status!.relayUrl!,
+      if (e.preferredRelay != null) e.preferredRelay!,
+      ...atlasRelays.keys,
+    }.toList()
+      ..sort((a, b) => (best[a] ?? 1e9).compareTo(best[b] ?? 1e9));
+    final worst = best.values.isEmpty ? 0.0 : best.values.reduce((a, b) => a > b ? a : b);
+
+    online.sort((a, b) => (links[a]?.latencyMs ?? 1 << 30).compareTo(links[b]?.latencyMs ?? 1 << 30));
 
     return Scaffold(
       appBar: AppBar(
@@ -54,69 +56,43 @@ class NetworkScreen extends ConsumerWidget {
         title: Row(
           children: [
             Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: running ? p.accent : p.danger,
-              ),
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: running ? p.accent : p.danger),
             ),
             const SizedBox(width: 8),
-            Text(
-              running ? 'Online' : 'Offline',
-              style: Txt.bodyStrong(running ? p.accent : p.ink),
-            ),
+            Text(busy ? 'Connecting…' : (running ? 'Online' : 'Offline'), style: Txt.title(running ? p.ink : p.muted)),
           ],
         ),
         actions: [
-          IconBtn(
-            Icons.monitor_heart_outlined,
-            tooltip: 'Diagnostics',
-            onTap: () => context.push('/diagnostics'),
+          IconBtn(Icons.travel_explore_rounded, tooltip: 'Network atlas', onTap: () => context.push('/atlas')),
+          IconBtn(Icons.monitor_heart_outlined, tooltip: 'Diagnostics', onTap: () => context.push('/diagnostics')),
+          Padding(
+            padding: const EdgeInsets.only(right: 12, left: 4),
+            child: running
+                ? OutlinedButton(
+                    style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact),
+                    onPressed: busy ? null : e.disconnectNode,
+                    child: const Text('Disconnect'),
+                  )
+                : FilledButton(
+                    style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
+                    onPressed: busy ? null : e.connectNode,
+                    child: Text(busy ? 'Connecting' : 'Connect'),
+                  ),
           ),
-          IconBtn(
-            Icons.shield_outlined,
-            tooltip: 'Privacy',
-            onTap: () => context.push('/privacy'),
-          ),
-          IconBtn(
-            Icons.hub_outlined,
-            tooltip: 'Iroh network',
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const IrohNetworkPage(),
-                ),
-              );
-            },
-          ),
-          TextButton(
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: busy
-                ? null
-                : (running ? e.disconnectNode : e.connectNode),
-            child: Text(
-              busy
-                  ? 'Connecting'
-                  : running
-                  ? 'Disconnect'
-                  : 'Connect',
-            ),
-          ),
-          const SizedBox(width: 8),
         ],
       ),
       body: RefreshIndicator(
         color: p.ink,
-        onRefresh: e.reconnect,
+        onRefresh: () async {
+          ref.invalidate(diagnosticsProvider);
+          await e.reconnect();
+        },
         child: ListView(
           padding: const EdgeInsets.only(bottom: Space.xxl),
           children: [
+            const PluginSlotView('network.top'),
             NetworkMesh(
               me: e.me.id,
               peers: online,
@@ -125,390 +101,246 @@ class NetworkScreen extends ConsumerWidget {
               homeRelay: status?.relayUrl,
               running: status?.running ?? false,
             ),
-            _NodeCard(status: status, id: e.me.id),
-            SectionLabel('Relays'),
             Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.gutter,
-                0,
-                Space.gutter,
-                Space.sm,
+              padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+              child: Container(
+                decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: p.line)),
+                clipBehavior: Clip.antiAlias,
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _Stat(Icons.link_rounded, '${online.length}', 'Linked', p.accent),
+                      VerticalDivider(width: 1, thickness: 1, color: p.line),
+                      _Stat(Icons.bolt_rounded, '$direct', 'Direct', const Color(0xFFE0A100)),
+                      VerticalDivider(width: 1, thickness: 1, color: p.line),
+                      _Stat(
+                        Icons.public_rounded,
+                        '${(e.atlas?.nodes().length ?? 0) + 1}',
+                        'On network',
+                        const Color(0xFF3A7CA5),
+                        onTap: () => context.push('/atlas'),
+                      ),
+                    ],
+                  ),
+                ),
               ),
+            ),
+            SectionLabel('Active connections', trailing: Text('${online.length}', style: Txt.mono(p.muted, size: 11))),
+            if (online.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                child: Container(
+                  padding: const EdgeInsets.all(Space.lg),
+                  decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+                  child: Row(
+                    children: [
+                      Icon(running ? Icons.hourglass_empty_rounded : Icons.cloud_off_rounded, color: p.muted),
+                      const SizedBox(width: Space.md),
+                      Expanded(
+                        child: Text(
+                          running
+                              ? 'No one reachable right now. Contacts connect automatically when they come online.'
+                              : 'Your node is off, so nobody can reach you. Tap Connect.',
+                          style: Txt.small(p.muted),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              for (final id in online) _ConnRow(id: id, link: links[id], bps: e.peerBps(id)),
+            SectionLabel(
+              'Relays',
+              trailing: Text(e.preferredRelay == null ? 'automatic' : 'pinned', style: Txt.mono(p.muted, size: 11)),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.xs),
               child: Text(
-                e.preferredRelay == null
-                    ? 'Mentos picks a relay. Choose one to pin dials to it.'
-                    : 'Pinned to ${e.preferredRelay}',
+                'Relays introduce phones and carry encrypted traffic when no direct path exists. '
+                'Use one to send new connections through it.',
                 style: Txt.small(p.muted),
               ),
             ),
-            for (final relay in <String>{
-              if (status?.relayUrl != null) status!.relayUrl!,
-              ...?status?.relays,
-            })
-              ListTile(
-                title: Text(relay, style: Txt.mono(p.ink, size: 12)),
-                trailing: e.preferredRelay == relay
-                    ? Icon(Icons.check_rounded, color: p.accent)
-                    : null,
-                onTap: () {
-                  final clear = e.preferredRelay == relay;
-                  e.preferRelay(clear ? null : relay);
-                  toast(context, clear ? 'Relay cleared' : 'Using this relay');
-                },
+            if (urls.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: Space.sm),
+                child: Text(running ? 'Measuring relays…' : 'Connect to see relays.', style: Txt.small(p.muted)),
               ),
-            RowTile(
-              icon: Icons.add_link_rounded,
-              title: 'Use another relay',
-              onTap: () async {
-                final url = await prompt(
-                  context,
-                  title: 'Relay',
-                  body: 'New connections dial this relay. Paste the full address.',
-                  hint: 'https://',
-                  action: 'Use relay',
-                  maxLength: 200,
-                  allowEmpty: false,
-                  keyboard: TextInputType.url,
-                  capitalization: TextCapitalization.none,
-                  validate: (v) {
-                    final t = v.trim();
-                    final u = Uri.tryParse(t);
-                    if (u == null ||
-                        (u.scheme != 'https' && u.scheme != 'http') ||
-                        u.host.isEmpty) {
-                      return 'Start with https:// and a host';
-                    }
-                    return null;
-                  },
-                );
-                if (url == null || url.trim().isEmpty) return;
-                e.preferRelay(url.trim());
-              },
-            ),
-            SectionLabel('Where data lives on this phone'),
+            for (final u in urls)
+              RelayRow(
+                url: u,
+                ms: best[u],
+                nodes: atlasRelays[u]?.nodes.length ?? 0,
+                home: status?.relayUrl == u,
+                pinned: e.preferredRelay == u,
+                worst: worst,
+              ),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+              padding: const EdgeInsets.fromLTRB(Space.gutter, Space.xs, Space.gutter, 0),
               child: Row(
                 children: [
-                  _Tier(
-                    value: tiers.owned,
-                    label: 'yours',
-                    hint: 'created here',
-                    tag: Provenance.mine,
-                  ),
-                  const SizedBox(width: Space.sm),
-                  _Tier(
-                    value: tiers.kept,
-                    label: 'kept',
-                    hint: 'others\' with consent',
-                    tag: Provenance.kept,
-                  ),
-                  const SizedBox(width: Space.sm),
-                  _Tier(
-                    value: tiers.live,
-                    label: 'live',
-                    hint: 'in memory only',
-                    tag: Provenance.live,
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.gutter,
-                Space.sm,
-                Space.gutter,
-                0,
-              ),
-              child: Text(
-                'Live items vanish when their author goes offline. Kept items stay until the author revokes '
-                'consent or you stop keeping them.',
-                style: Txt.mono(p.faint, size: 11),
-              ),
-            ),
-            DefaultTabController(
-              length: 3,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const TabBar(
-                    tabs: [
-                      Tab(text: 'Connected now'),
-                      Tab(text: 'You keep'),
-                      Tab(text: 'Keep you'),
-                    ],
-                  ),
-                  SizedBox(
-                    height: 320,
-                    child: TabBarView(
-                      children: [
-                        ListView(
-                          children: [
-                            if (online.isEmpty)
-                              _Hint(
-                                status?.running ?? false
-                                    ? 'No one reachable right now. Contacts connect automatically when they come online.'
-                                    : 'Your node isn\'t running, so nobody can reach you.',
-                              )
-                            else
-                              for (final id in online)
-                                _PeerRow(
-                                  id: id,
-                                  subtitle: [
-                                    _linkLabel(links[id]),
-                                    if (e.peerBps(id) > 0) speed(e.peerBps(id)),
-                                  ].join(' · '),
-                                  live: true,
-                                ),
-                          ],
-                        ),
-                        ListView(
-                          children: [
-                            if (custody.isEmpty &&
-                                preserved.isEmpty &&
-                                spacesKept.isEmpty)
-                              _Hint('Nothing from anyone else is stored here.')
-                            else ...[
-                              for (final g in custody)
-                                _PeerRow(
-                                  id: g.peer,
-                                  subtitle:
-                                      '${_scopeLabel(g.scope, e.me.id)} · ${keptBy[g.peer] ?? 0} items',
-                                  action: TextButton(
-                                    onPressed: () => e.dropTheirs(g.scope),
-                                    child: Text(
-                                      'Stop',
-                                      style: Txt.small(p.danger),
-                                    ),
-                                  ),
-                                ),
-                              for (final x in preserved)
-                                _PeerRow(
-                                  id: x.id,
-                                  subtitle:
-                                      'public posts · ${keptBy[x.id] ?? 0} items',
-                                  action: TextButton(
-                                    onPressed: () => e.setPreserve(x.id, false),
-                                    child: Text(
-                                      'Stop',
-                                      style: Txt.small(p.danger),
-                                    ),
-                                  ),
-                                ),
-                              for (final s in spacesKept)
-                                ListTile(
-                                  leading: Icon(
-                                    Icons.grid_view_rounded,
-                                    color: p.inkSoft,
-                                  ),
-                                  title: Text(s.name),
-                                  subtitle: Text(
-                                    'space history',
-                                    style: Txt.mono(p.muted, size: 11),
-                                  ),
-                                  onTap: () =>
-                                      context.push('/s/${s.id}/settings'),
-                                ),
-                            ],
-                          ],
-                        ),
-                        ListView(
-                          children: [
-                            if (keepers.isEmpty)
-                              _Hint(
-                                'No one. Everything you create exists only on this phone and is visible while you\'re online.',
-                              )
-                            else
-                              for (final entry in keepers.entries)
-                                _PeerRow(
-                                  id: entry.key,
-                                  subtitle: entry.value
-                                      .map(
-                                        (g) =>
-                                            '${_scopeLabel(g.scope, e.me.id)}${g.state == GrantState.pending ? ' (waiting)' : ''}',
-                                      )
-                                      .join(' · '),
-                                ),
-                          ],
-                        ),
-                      ],
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.add_link_rounded, size: 18),
+                      label: const Text('Add a relay'),
+                      onPressed: () => _addRelay(context, ref),
                     ),
                   ),
+                  if (e.preferredRelay != null) ...[
+                    const SizedBox(width: Space.sm),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.autorenew_rounded, size: 18),
+                        label: const Text('Automatic'),
+                        onPressed: () => useRelay(context, ref, e.preferredRelay!),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-            SectionLabel('Topics'),
-            _Hint(
-              '${e.topicCount} gossip topics joined — one per space and per person you follow.',
-            ),
+            SectionLabel('More'),
+            _Link(Icons.inventory_2_outlined, 'Who holds what', 'Copies you keep for others, and who keeps yours', () => context.push('/custody')),
+            _Link(Icons.shield_outlined, 'Privacy and transports', switch (e.settings.privacy) {
+              'relay' => 'Hide my IP',
+              'tor' => 'Tor',
+              _ => 'Standard',
+            }, () => context.push('/diagnostics?tab=privacy')),
+            _Link(Icons.memory_rounded, 'This node', 'Id, addresses and gossip topics', () => context.push('/diagnostics?tab=node')),
           ],
         ),
       ),
     );
   }
 
-  static String _linkLabel(LinkInfo? l) {
-    if (l == null) return 'via gossip';
-    final kind = switch (l.kind) {
-      LinkKind.direct => 'direct',
-      LinkKind.relay => 'relayed',
-      LinkKind.mixed => 'direct + relay',
-      LinkKind.none => 'connecting',
-    };
-    return l.latencyMs == null ? kind : '$kind · ${l.latencyMs} ms';
-  }
-}
-
-String _scopeLabel(String scope, String me) {
-  final t = Scope.type(scope);
-  return switch (t) {
-    'dm' => 'chat',
-    'feed' => 'posts',
-    'story' => 'stories',
-    'chan' => 'channel',
-    'sfeed' => 'space posts',
-    _ => t,
-  };
-}
-
-class _NodeCard extends StatelessWidget {
-  const _NodeCard({required this.status, required this.id});
-  final NetStatus? status;
-  final String id;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    final s = status;
-    final running = s?.running ?? false;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: Space.gutter),
-      padding: const EdgeInsets.all(Space.lg),
-      decoration: BoxDecoration(
-        color: p.surface,
-        borderRadius: BorderRadius.circular(Radii.lg),
-        border: Border.all(color: p.line),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: running ? p.accent : p.danger,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                running ? 'Node online' : 'Node offline',
-                style: Txt.bodyStrong(p.ink),
-              ),
-              const Spacer(),
-              Text(s?.engine ?? '—', style: Txt.mono(p.muted, size: 11)),
-            ],
-          ),
-          const SizedBox(height: Space.md),
-          _KV('node id', id, copy: true),
-          _KV(
-            'relays',
-            s == null || s.relays.isEmpty
-                ? (s?.relayUrl ?? (running ? 'searching n0 relays…' : '—'))
-                : s.relays
-                      .map(
-                        (u) => u
-                            .replaceAll(RegExp(r'/$'), '')
-                            .replaceAll(RegExp(r'\.$'), ''),
-                      )
-                      .join('\n'),
-          ),
-          _KV('home', s?.relayUrl ?? '—'),
-          _KV(
-            'addresses',
-            s == null || s.directAddrs.isEmpty
-                ? '—'
-                : s.directAddrs.take(3).join('\n'),
-          ),
-          _KV('encryption', 'QUIC · TLS 1.3 · Ed25519'),
-        ],
-      ),
+  Future<void> _addRelay(BuildContext context, WidgetRef ref) async {
+    final url = await prompt(
+      context,
+      title: 'Relay',
+      body: 'New connections dial this relay. Paste the full address, for example a relay you run yourself.',
+      hint: 'https://',
+      action: 'Use relay',
+      maxLength: 200,
+      allowEmpty: false,
+      keyboard: TextInputType.url,
+      capitalization: TextCapitalization.none,
+      validate: (v) {
+        final u = Uri.tryParse(v.trim());
+        if (u == null || (u.scheme != 'https' && u.scheme != 'http') || u.host.isEmpty) return 'Start with https:// and a host';
+        return null;
+      },
     );
+    if (url == null || url.trim().isEmpty || !context.mounted) return;
+    useRelay(context, ref, url.trim());
   }
 }
 
-class _KV extends StatelessWidget {
-  const _KV(this.k, this.v, {this.copy = false});
-  final String k;
-  final String v;
-  final bool copy;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: GestureDetector(
-        onTap: copy
-            ? () {
-                Clipboard.setData(ClipboardData(text: v));
-                toast(context, 'Copied');
-              }
-            : null,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 86,
-              child: Text(k, style: Txt.mono(p.faint, size: 11)),
-            ),
-            Expanded(
-              child: Text(
-                copy && v.length > 24
-                    ? '${v.substring(0, 20)}…${v.substring(v.length - 8)}'
-                    : v,
-                style: Txt.mono(p.ink, size: 11.5),
-              ),
-            ),
-            if (copy) Icon(Icons.copy_rounded, size: 13, color: p.faint),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Tier extends StatelessWidget {
-  const _Tier({
-    required this.value,
-    required this.label,
-    required this.hint,
-    required this.tag,
-  });
-  final int value;
+class _Stat extends StatelessWidget {
+  const _Stat(this.icon, this.value, this.label, this.tint, {this.onTap});
+  final IconData icon;
+  final String value;
   final String label;
-  final String hint;
-  final Provenance tag;
+  final Color tint;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(Space.md),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(color: p.line),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Space.md, Space.md, Space.sm, Space.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      decoration: BoxDecoration(color: tint.withValues(alpha: .14), borderRadius: BorderRadius.circular(8)),
+                      child: Icon(icon, size: 15, color: tint),
+                    ),
+                    const Spacer(),
+                    if (onTap != null) Icon(Icons.chevron_right_rounded, size: 16, color: p.faint),
+                  ],
+                ),
+                const SizedBox(height: Space.sm),
+                Text(value, style: Txt.heading(p.ink).copyWith(fontSize: 22, height: 1.1, fontFeatures: const [FontFeature.tabularFigures()])),
+                const SizedBox(height: 2),
+                Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.muted).copyWith(fontSize: 12)),
+              ],
+            ),
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      ),
+    );
+  }
+}
+
+class _ConnRow extends ConsumerWidget {
+  const _ConnRow({required this.id, required this.link, required this.bps});
+  final String id;
+  final LinkInfo? link;
+  final int bps;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.pal;
+    final name = ref.watch(peerProvider(id)).value?.name ?? alias(id);
+    final (route, color) = switch (link?.kind) {
+      LinkKind.direct => ('Direct', p.accent),
+      LinkKind.mixed => ('Direct + relay', p.accent),
+      LinkKind.relay => ('Relayed', const Color(0xFFF59E0B)),
+      LinkKind.none => ('Connecting', p.muted),
+      null => ('Via gossip', p.muted),
+    };
+    final relay = link?.paths.where((x) => x.selected && x.kind == LinkKind.relay).firstOrNull;
+    return InkWell(
+      onTap: () => context.push('/node/$id'),
+      onLongPress: () => showPeerTech(context, id),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: 9),
+        child: Row(
           children: [
-            ProvenanceTag(tag, compact: true),
-            const SizedBox(height: Space.sm),
-            Text('$value', style: Txt.title(p.ink)),
-            Text(hint, style: Txt.mono(p.muted, size: 10)),
+            Avatar(id: id, size: 40),
+            const SizedBox(width: Space.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                        decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(Radii.pill)),
+                        child: Text(route, style: Txt.mono(color, size: 10.5, w: FontWeight.w500)),
+                      ),
+                      if (relay != null) ...[
+                        const SizedBox(width: 6),
+                        Flexible(child: Text(relayName(relay.address), maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.muted))),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(link?.latencyMs == null ? '—' : '${link!.latencyMs} ms', style: Txt.mono(p.ink, size: 12, w: FontWeight.w500)),
+                if (bps > 0) Text(speed(bps), style: Txt.mono(p.muted, size: 10.5)),
+              ],
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right_rounded, color: p.faint),
           ],
         ),
       ),
@@ -516,43 +348,12 @@ class _Tier extends StatelessWidget {
   }
 }
 
-class _PeerRow extends ConsumerWidget {
-  const _PeerRow({
-    required this.id,
-    required this.subtitle,
-    this.action,
-    this.live = false,
-  });
-  final String id;
+class _Link extends StatelessWidget {
+  const _Link(this.icon, this.title, this.subtitle, this.onTap);
+  final IconData icon;
+  final String title;
   final String subtitle;
-  final Widget? action;
-  final bool live;
-
+  final VoidCallback onTap;
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final p = context.pal;
-    final name = ref.watch(peerProvider(id)).value?.name ?? alias(id);
-    return ListTile(
-      leading: Avatar(id: id, size: 36),
-      title: Text(name),
-      subtitle: Text(
-        subtitle,
-        style: Txt.mono(live ? p.accent : p.muted, size: 11),
-      ),
-      trailing: action,
-      onTap: () => context.push('/node/$id'),
-      onLongPress: () => showPeerTech(context, id),
-    );
-  }
-}
-
-class _Hint extends StatelessWidget {
-  const _Hint(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: Space.gutter, vertical: 4),
-    child: Text(text, style: Txt.small(context.pal.muted)),
-  );
+  Widget build(BuildContext context) => RowTile(icon: icon, title: title, subtitle: subtitle, onTap: onTap);
 }

@@ -156,7 +156,9 @@ void main() {
     expect(find.text('use1-1'), findsWidgets);
     expect(find.text('329 ms'), findsOneWidget);
     expect(tester.takeException(), isNull);
-    await tester.scrollUntilVisible(find.text('LIVE CONNECTIONS'), 200, scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Connections'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ListTile), findsWidgets);
     expect(tester.takeException(), isNull);
 
     await pumpScreen(tester, e, const PrivacyScreen());

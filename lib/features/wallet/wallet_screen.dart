@@ -93,6 +93,7 @@ class WalletScreen extends ConsumerWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'wallet-send',
         onPressed: () async {
           final people = e.people().where((x) => !x.blocked).toList();
           if (people.isEmpty) {

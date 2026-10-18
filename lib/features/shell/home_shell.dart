@@ -8,6 +8,9 @@ import '../../core/theme/tokens.dart';
 import '../../state/providers.dart';
 import '../../state/session.dart';
 import '../../state/settings.dart';
+import '../../plugins/plugin_providers.dart';
+import '../../plugins/plugins.dart';
+import '../plugins/plugins_screen.dart';
 
 /// One bottom-bar destination. [branch] is the shell index, which stays put
 /// when Feed or Wallet is hidden.
@@ -67,7 +70,16 @@ class HomeShell extends ConsumerWidget {
     final unread = ref.watch(unreadChatsProvider).value ?? 0;
     final net = ref.watch(netStatusProvider).value;
     final peers = net?.links.length ?? 0;
-    final tabs = shellTabs(settings, unread: unread, peers: peers);
+    final layout = ref.watch(pluginLayoutProvider);
+    ref.watch(pluginTickProvider);
+    final pluginTabs = ref.watch(pluginHostProvider)?.tabs ?? const <PluginTab>[];
+    const names = {0: 'feed', 1: 'wallet', 3: 'network'};
+    final tabs = shellTabs(settings, unread: unread, peers: peers).where((t) => !layout.hideTabs.contains(names[t.branch])).toList();
+    final labels = layout.navLabels ?? true;
+    // A layout plugin hid the tab that is open: move to the first one left.
+    if (!tabs.any((t) => t.branch == shell.currentIndex) && tabs.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => shell.goBranch(tabs.first.branch));
+    }
 
     ref.listen(settingsProvider, (prev, next) {
       if (prev == null) return;
@@ -103,6 +115,21 @@ class HomeShell extends ConsumerWidget {
                         shell.goBranch(tab.branch, initialLocation: tab.branch == shell.currentIndex);
                       },
                       onLongPress: tab.branch == 4 ? () => _accounts(context, ref) : null,
+                      showLabel: labels,
+                    ),
+                  ),
+                for (final t in pluginTabs)
+                  Expanded(
+                    child: _NavItem(
+                      icon: pluginIcon(t.icon),
+                      activeIcon: pluginIcon(t.icon),
+                      label: t.title.length > 10 ? '${t.title.substring(0, 9)}…' : t.title,
+                      active: false,
+                      showLabel: labels,
+                      onTap: () {
+                        HapticFeedback.selectionClick();
+                        context.push('/plugins/${t.plugin}/page/${t.page}');
+                      },
                     ),
                   ),
               ],
@@ -158,6 +185,7 @@ class _NavItem extends StatelessWidget {
     this.badge = 0,
     this.live = false,
     this.onLongPress,
+    this.showLabel = true,
   });
 
   final IconData icon;
@@ -168,6 +196,7 @@ class _NavItem extends StatelessWidget {
   final VoidCallback? onLongPress;
   final int badge;
   final bool live;
+  final bool showLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -218,9 +247,11 @@ class _NavItem extends StatelessWidget {
                 ),
             ],
           ),
-          const SizedBox(height: 4),
-          Text(label,
-              style: Txt.mono(active ? p.ink : p.faint, size: 10, w: active ? FontWeight.w500 : FontWeight.w400)),
+          if (showLabel) ...[
+            const SizedBox(height: 4),
+            Text(label,
+                style: Txt.mono(active ? p.ink : p.faint, size: 10, w: active ? FontWeight.w500 : FontWeight.w400)),
+          ],
         ],
       ),
     );

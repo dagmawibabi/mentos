@@ -1,0 +1,10 @@
+{
+  "id": "midnight",
+  "name": "Midnight",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "A deep indigo theme with a violet accent, plus a text size you choose. Pick your own accent on its page.",
+  "icon": "moon",
+  "permissions": ["theme", "storage", "ui"],
+  "main": "main.js"
+}

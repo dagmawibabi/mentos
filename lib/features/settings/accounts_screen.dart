@@ -21,7 +21,12 @@ class AccountsScreen extends ConsumerStatefulWidget {
 class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   late Future<({List<AccountEntry> accounts, String active})> _list = ref.read(sessionProvider.notifier).accounts();
 
-  void _reload() => setState(() => _list = ref.read(sessionProvider.notifier).accounts());
+  void _reload() {
+    final next = ref.read(sessionProvider.notifier).accounts();
+    setState(() {
+      _list = next;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

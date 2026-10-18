@@ -1,0 +1,10 @@
+{
+  "id": "away",
+  "name": "Away message",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "When you're away, replies once to each person who messages you, with a note you write.",
+  "icon": "away",
+  "permissions": ["messages.read", "messages.send", "storage", "ui", "notify"],
+  "main": "main.js"
+}

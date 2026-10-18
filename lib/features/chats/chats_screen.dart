@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../plugins/plugins_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -67,6 +68,12 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               )
             : null,
         actions: [
+          if (!_archived)
+            IconBtn(
+              Icons.auto_awesome_outlined,
+              tooltip: 'Mentos AI',
+              onTap: () => context.push('/ai'),
+            ),
           if (_archived || pane == InboxPane.chats) ...[
             IconBtn(
               Icons.call_outlined,
@@ -79,7 +86,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
               onTap: () => context.push('/transfer'),
             ),
             IconBtn(
-              Icons.edit_square,
+              Icons.edit_outlined,
               tooltip: 'New chat',
               onTap: () => _newChat(context),
             ),
@@ -125,6 +132,7 @@ class _ChatsScreenState extends ConsumerState<ChatsScreen> {
                 onChanged: (next) => _select(context, next),
               ),
             ),
+          const PluginSlotView('chats.top'),
           Expanded(
             child: switch (pane) {
               InboxPane.channels when !_archived => const ChannelsScreen(
@@ -412,6 +420,9 @@ class _ChatRow extends ConsumerWidget {
                 children: [
                   Row(
                     children: [
+                      Expanded(
+                        child: Row(
+                          children: [
                       Flexible(
                         child: Text(
                           name,
@@ -440,32 +451,30 @@ class _ChatRow extends ConsumerWidget {
                         const SizedBox(width: 5),
                         Icon(Icons.push_pin_rounded, size: 13, color: p.faint),
                       ],
-                      const Spacer(),
-                      if (last != null)
+                          ],
+                        ),
+                      ),
+                      if (last != null) ...[
+                        const SizedBox(width: Space.sm),
                         Text(
                           timeAgo(last.ts),
+                          textAlign: TextAlign.right,
                           style: Txt.mono(
                             c.unread > 0 ? p.accent : p.faint,
                             size: 11,
                           ),
                         ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 3),
                   Row(
                     children: [
-                      if (last != null && last.mine && !c.typing) ...[
+                      if (last != null && last.mine && !c.typing && (last.delivery == Delivery.sending || last.delivery == Delivery.failed)) ...[
                         Icon(
-                          switch (last.delivery) {
-                            Delivery.sending => Icons.schedule_rounded,
-                            Delivery.failed => Icons.error_outline_rounded,
-                            Delivery.sent => Icons.check_rounded,
-                            _ => Icons.done_all_rounded,
-                          },
+                          last.delivery == Delivery.failed ? Icons.error_outline_rounded : Icons.schedule_rounded,
                           size: 14,
-                          color: last.delivery == Delivery.read
-                              ? p.accent
-                              : p.faint,
+                          color: last.delivery == Delivery.failed ? p.danger : p.faint,
                         ),
                         const SizedBox(width: 3),
                       ],

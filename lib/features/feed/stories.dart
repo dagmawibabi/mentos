@@ -49,9 +49,10 @@ class StoriesBar extends ConsumerWidget {
           _Bubble(
             id: e.me.id,
             label: 'Your story',
-            seen: true,
+            // Your own live story gets the same accent ring others see.
+            seen: false,
             ring: hasMine,
-            add: !hasMine,
+            add: true,
             onTap: () => context.push(hasMine ? '/story/${e.me.id}' : '/story/new'),
             onLongPress: () => context.push('/story/new'),
           ),

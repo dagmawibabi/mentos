@@ -129,8 +129,11 @@ class _Placeholder extends StatelessWidget {
 
 /// Image/video grid used in posts and messages.
 class MediaGrid extends StatelessWidget {
-  const MediaGrid({super.key, required this.media, required this.item, this.radius = Radii.md, this.maxHeight = 420});
+  const MediaGrid({super.key, required this.media, required this.item, this.radius = Radii.md, this.maxHeight = 420, this.square = false});
   final List<MediaRef> media;
+
+  /// Feed posts: every layout fills a 1:1 frame, so the feed lines up.
+  final bool square;
   final Item item;
   final double radius;
   final double maxHeight;
@@ -139,17 +142,22 @@ class MediaGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     final visual = media.where((m) => m.isImage || m.isVideo).toList();
     if (visual.isEmpty) return const SizedBox.shrink();
+    // The same post can sit twice on one screen (a feed and a pinned copy,
+    // a repost, the same photo attached twice), so tags carry this grid's
+    // own identity and the index. Duplicate tags crash the page transition.
+    final gridId = identityHashCode(context);
+    final tags = <Object>[for (var i = 0; i < visual.length; i++) 'media-$gridId-${item.id}-$i'];
     void open(int i) => Navigator.of(context).push(PageRouteBuilder(
           opaque: false,
           barrierColor: Colors.black,
-          pageBuilder: (_, _, _) => MediaViewer(media: visual, item: item, initial: i),
+          pageBuilder: (_, _, _) => MediaViewer(media: visual, item: item, initial: i, heroTags: tags),
           transitionsBuilder: (_, a, _, child) => FadeTransition(opacity: a, child: child),
         ));
 
     Widget tile(int i, {double? aspect}) {
       final m = visual[i];
       final child = Hero(
-        tag: '${item.id}-${m.hash}',
+        tag: tags[i],
         child: MediaLoader(
           media: m,
           item: item,
@@ -165,12 +173,14 @@ class MediaGrid extends StatelessWidget {
     }
 
     final Widget grid;
-    if (visual.length == 1) {
+    if (visual.length == 1 && square) {
+      grid = AspectRatio(aspectRatio: 1, child: tile(0));
+    } else if (visual.length == 1) {
       final a = (visual.first.aspect ?? 4 / 3).clamp(.6, 2.2);
       grid = ConstrainedBox(constraints: BoxConstraints(maxHeight: maxHeight), child: tile(0, aspect: a));
     } else if (visual.length == 2) {
       grid = AspectRatio(
-        aspectRatio: 16 / 10,
+        aspectRatio: square ? 1 : 16 / 10,
         child: Row(children: [
           Expanded(child: tile(0)),
           const SizedBox(width: 2),
@@ -179,7 +189,7 @@ class MediaGrid extends StatelessWidget {
       );
     } else {
       grid = AspectRatio(
-        aspectRatio: 1.2,
+        aspectRatio: square ? 1 : 1.2,
         child: Row(children: [
           Expanded(child: tile(0)),
           const SizedBox(width: 2),
@@ -270,10 +280,13 @@ class _VideoThumbState extends State<_VideoThumb> {
 }
 
 class MediaViewer extends ConsumerStatefulWidget {
-  const MediaViewer({super.key, required this.media, required this.item, this.initial = 0});
+  const MediaViewer({super.key, required this.media, required this.item, this.initial = 0, this.heroTags});
   final List<MediaRef> media;
   final Item item;
   final int initial;
+
+  /// The tags the opening grid used, one per item, so the photo flies in.
+  final List<Object>? heroTags;
 
   @override
   ConsumerState<MediaViewer> createState() => _MediaViewerState();
@@ -307,7 +320,7 @@ class _MediaViewerState extends ConsumerState<MediaViewer> {
         itemBuilder: (_, i) {
           final ref = widget.media[i];
           return Hero(
-            tag: '${widget.item.id}-${ref.hash}',
+            tag: widget.heroTags?[i] ?? '${widget.item.id}-${ref.hash}-$i',
             child: MediaLoader(
               media: ref,
               item: widget.item,

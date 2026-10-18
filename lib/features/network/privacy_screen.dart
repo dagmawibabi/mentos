@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
@@ -8,15 +7,26 @@ import '../../state/providers.dart';
 import '../../state/settings.dart';
 import '../../widgets/ui.dart';
 
-/// Picks which transports the iroh endpoint binds. Changing it restarts the node.
-class PrivacyScreen extends ConsumerStatefulWidget {
+/// Kept for old links; the panel now lives in Network diagnostics.
+class PrivacyScreen extends StatelessWidget {
   const PrivacyScreen({super.key});
 
   @override
-  ConsumerState<PrivacyScreen> createState() => _PrivacyScreenState();
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Privacy and transports')),
+    body: const PrivacyPanel(),
+  );
 }
 
-class _PrivacyScreenState extends ConsumerState<PrivacyScreen> {
+/// Picks which transports the iroh endpoint binds. Changing it restarts the node.
+class PrivacyPanel extends ConsumerStatefulWidget {
+  const PrivacyPanel({super.key});
+
+  @override
+  ConsumerState<PrivacyPanel> createState() => _PrivacyPanelState();
+}
+
+class _PrivacyPanelState extends ConsumerState<PrivacyPanel> {
   late final TextEditingController _proxy;
 
   @override
@@ -59,46 +69,77 @@ class _PrivacyScreenState extends ConsumerState<PrivacyScreen> {
     final s = ref.watch(settingsProvider);
     final e = ref.watch(maybeEngineProvider);
     final err = e?.netOptionsError;
+    final (title, line, icon) = switch (s.privacy) {
+      'relay' => ('Your IP is hidden from peers', 'Every link goes through a relay.', Icons.visibility_off_rounded),
+      'tor' => ('Hidden from peers and relays', 'Relays are reached through Tor at ${s.proxyUrl}.', Icons.security_rounded),
+      _ => ('Fastest connections', 'Direct paths when possible; peers can see your IP.', Icons.bolt_rounded),
+    };
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Privacy and transports')),
-      body: ListView(
-        padding: const EdgeInsets.only(bottom: Space.xxl),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
-            child: Text(
-              'Everything Mentos sends is end-to-end encrypted either way. These modes decide who can see '
-              'your IP address: the people you connect to, and the relay that introduces you.',
-              style: Txt.small(p.muted),
+    return ListView(
+      padding: const EdgeInsets.only(bottom: Space.xxl),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
+          child: Container(
+            padding: const EdgeInsets.all(Space.lg),
+            decoration: BoxDecoration(color: p.accentSoft, borderRadius: BorderRadius.circular(20)),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(color: p.accent, borderRadius: BorderRadius.circular(14)),
+                  child: Icon(icon, color: p.accentInk),
+                ),
+                const SizedBox(width: Space.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: Txt.bodyStrong(p.ink)),
+                      const SizedBox(height: 2),
+                      Text(line, style: Txt.small(p.inkSoft)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          SectionLabel('Mode'),
-          _Mode(
-            selected: s.privacy == 'standard',
-            icon: Icons.bolt_rounded,
-            title: 'Standard',
-            body: 'Direct connections when possible, relay otherwise. Fastest; peers you connect to can see your IP.',
-            onTap: () => _choose('standard'),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
+          child: Text(
+            'Everything Mentos sends is end-to-end encrypted in every mode. The mode decides who can see your IP address: '
+            'the people you connect to, and the relay that introduces you.',
+            style: Txt.small(p.muted),
           ),
-          _Mode(
-            selected: s.privacy == 'relay',
-            icon: Icons.visibility_off_outlined,
-            title: 'Hide my IP',
-            body: 'No direct connections. Every link goes through an iroh relay, so peers only ever see the relay. '
-                'The relay sees your IP but only ciphertext.',
-            onTap: () => _choose('relay'),
-          ),
-          _Mode(
-            selected: s.privacy == 'tor',
-            icon: Icons.security_rounded,
-            title: 'Tor',
-            body: 'Like Hide my IP, and the relay is reached through Tor. Neither peers nor the relay see your IP. '
-                'Needs Orbot (or another Tor HTTP proxy) running on this phone. Slowest.',
-            onTap: () => _choose('tor'),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, 0),
+        ),
+        SectionLabel('Mode'),
+        _Mode(
+          selected: s.privacy == 'standard',
+          icon: Icons.bolt_rounded,
+          title: 'Standard',
+          tag: 'fast',
+          body: 'Direct connections when possible, relay otherwise. Peers you connect to can see your IP.',
+          onTap: () => _choose('standard'),
+        ),
+        _Mode(
+          selected: s.privacy == 'relay',
+          icon: Icons.visibility_off_outlined,
+          title: 'Hide my IP',
+          tag: 'balanced',
+          body: 'No direct connections. Peers only ever see the relay. The relay sees your IP, but only ciphertext.',
+          onTap: () => _choose('relay'),
+        ),
+        _Mode(
+          selected: s.privacy == 'tor',
+          icon: Icons.security_rounded,
+          title: 'Tor',
+          tag: 'private',
+          body: 'Like Hide my IP, with the relay reached through Tor. Needs Orbot or another Tor HTTP proxy on this phone.',
+          onTap: () => _choose('tor'),
+          child: Padding(
+            padding: const EdgeInsets.only(top: Space.md),
             child: TextField(
               controller: _proxy,
               keyboardType: TextInputType.url,
@@ -107,6 +148,7 @@ class _PrivacyScreenState extends ConsumerState<PrivacyScreen> {
                 labelText: 'Tor HTTP proxy',
                 helperText: 'Orbot: enable its HTTP proxy, default ${Settings.defaultProxy}',
                 errorText: _proxy.text.isEmpty ? null : _proxyError(_proxy.text),
+                isDense: true,
               ),
               onChanged: (_) => setState(() {}),
               onSubmitted: (_) {
@@ -114,36 +156,30 @@ class _PrivacyScreenState extends ConsumerState<PrivacyScreen> {
               },
             ),
           ),
-          if (err != null)
-            Container(
-              margin: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, 0),
-              padding: const EdgeInsets.all(Space.md),
-              decoration: BoxDecoration(color: p.dangerSoft, borderRadius: BorderRadius.circular(Radii.md)),
-              child: Text('The node refused these options: $err', style: Txt.small(p.danger)),
-            ),
-          SectionLabel('What each mode hides'),
-          const _Matrix(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, 0),
-            child: OutlinedButton.icon(
-              icon: const Icon(Icons.monitor_heart_outlined, size: 18),
-              label: const Text('Check it in diagnostics'),
-              onPressed: () => context.push('/diagnostics'),
-            ),
+        ),
+        if (err != null)
+          Container(
+            margin: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, 0),
+            padding: const EdgeInsets.all(Space.md),
+            decoration: BoxDecoration(color: p.dangerSoft, borderRadius: BorderRadius.circular(14)),
+            child: Text('The node refused these options: $err', style: Txt.small(p.danger)),
           ),
-        ],
-      ),
+        SectionLabel('What each mode hides'),
+        _Matrix(selected: s.privacy),
+      ],
     );
   }
 }
 
 class _Mode extends StatelessWidget {
-  const _Mode({required this.selected, required this.icon, required this.title, required this.body, required this.onTap});
+  const _Mode({required this.selected, required this.icon, required this.title, required this.tag, required this.body, required this.onTap, this.child});
   final bool selected;
   final IconData icon;
   final String title;
+  final String tag;
   final String body;
   final VoidCallback onTap;
+  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -156,26 +192,60 @@ class _Mode extends StatelessWidget {
           duration: Motion.fast,
           padding: const EdgeInsets.all(Space.lg),
           decoration: BoxDecoration(
-            color: selected ? p.accentSoft : p.surface,
-            borderRadius: BorderRadius.circular(Radii.lg),
-            border: Border.all(color: selected ? p.accent : p.line),
+            color: p.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: selected ? p.accent : p.line, width: selected ? 1.6 : 1),
           ),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, color: selected ? p.accent : p.inkSoft),
-              const SizedBox(width: Space.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Txt.bodyStrong(p.ink)),
-                    const SizedBox(height: 2),
-                    Text(body, style: Txt.small(p.muted)),
-                  ],
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(color: selected ? p.accentSoft : p.raised, borderRadius: BorderRadius.circular(12)),
+                    child: Icon(icon, size: 20, color: selected ? p.accent : p.inkSoft),
+                  ),
+                  const SizedBox(width: Space.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 2,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(title, style: Txt.bodyStrong(p.ink)),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(Radii.pill)),
+                              child: Text(tag, style: Txt.mono(p.muted, size: 10)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 3),
+                        Text(body, style: Txt.small(p.muted)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: Space.sm),
+                  AnimatedContainer(
+                    duration: Motion.fast,
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: selected ? p.accent : Colors.transparent,
+                      border: Border.all(color: selected ? p.accent : p.faint, width: 2),
+                    ),
+                    child: selected ? Icon(Icons.check_rounded, size: 14, color: p.accentInk) : null,
+                  ),
+                ],
               ),
-              if (selected) Icon(Icons.check_rounded, color: p.accent, size: 20),
+              ?child,
             ],
           ),
         ),
@@ -184,43 +254,82 @@ class _Mode extends StatelessWidget {
   }
 }
 
+/// Side by side, with the mode in use highlighted.
 class _Matrix extends StatelessWidget {
-  const _Matrix();
+  const _Matrix({required this.selected});
+  final String selected;
 
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
-    const rows = [
-      ('', 'Standard', 'Hide IP', 'Tor'),
-      ('Peers see your IP', 'yes', 'no', 'no'),
-      ('Relay sees your IP', 'yes', 'yes', 'no'),
-      ('Anyone reads content', 'no', 'no', 'no'),
-      ('Works without internet', 'LAN', 'no', 'no'),
-      ('Speed', 'fast', 'ok', 'slow'),
+    const modes = ['standard', 'relay', 'tor'];
+    const heads = ['Standard', 'Hide IP', 'Tor'];
+    // true = protected (good), false = exposed, null = neutral text.
+    const rows = <(String, List<Object>)>[
+      ('Peers see your IP', [false, true, true]),
+      ('Relay sees your IP', [false, false, true]),
+      ('Anyone reads content', [true, true, true]),
+      ('Works without internet', ['LAN', 'no', 'no']),
+      ('Speed', ['fast', 'ok', 'slow']),
     ];
+    Widget cell(Object v, bool on) {
+      if (v is bool) {
+        return Icon(
+          v ? Icons.check_circle_rounded : Icons.cancel_rounded,
+          size: 18,
+          color: v ? p.accent : p.danger.withValues(alpha: on ? 1 : .55),
+        );
+      }
+      return Text('$v', textAlign: TextAlign.center, style: Txt.mono(on ? p.ink : p.muted, size: 11.5, w: FontWeight.w500));
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
-      child: Table(
-        columnWidths: const {0: FlexColumnWidth(2.2)},
-        children: [
-          for (final (i, r) in rows.indexed)
+      child: Container(
+        decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+        clipBehavior: Clip.antiAlias,
+        child: Table(
+          columnWidths: const {0: FlexColumnWidth(2.2)},
+          defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+          children: [
             TableRow(
-              decoration: BoxDecoration(border: Border(bottom: BorderSide(color: p.line))),
+              decoration: BoxDecoration(color: p.raised),
               children: [
-                for (final (j, c) in [r.$1, r.$2, r.$3, r.$4].indexed)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(Space.md, 10, 4, 10),
+                  child: Text('PROTECTS', style: Txt.label(p.muted)),
+                ),
+                for (var j = 0; j < 3; j++)
+                  Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    color: modes[j] == selected ? p.accentSoft : null,
                     child: Text(
-                      c,
-                      textAlign: j == 0 ? TextAlign.left : TextAlign.center,
-                      style: i == 0
-                          ? Txt.mono(p.muted, size: 10.5, w: FontWeight.w500)
-                          : Txt.mono(j == 0 ? p.inkSoft : (c == 'no' ? p.accent : p.ink), size: 11),
+                      heads[j],
+                      textAlign: TextAlign.center,
+                      style: Txt.mono(modes[j] == selected ? p.accent : p.inkSoft, size: 11, w: FontWeight.w600),
                     ),
                   ),
               ],
             ),
-        ],
+            for (final (i, r) in rows.indexed)
+              TableRow(
+                decoration: BoxDecoration(border: i == 0 ? null : Border(top: BorderSide(color: p.line))),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(Space.md, 12, 4, 12),
+                    child: Text(r.$1, style: Txt.small(p.inkSoft)),
+                  ),
+                  for (var j = 0; j < 3; j++)
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      color: modes[j] == selected ? p.accentSoft.withValues(alpha: .5) : null,
+                      alignment: Alignment.center,
+                      child: cell(r.$2[j], modes[j] == selected),
+                    ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }

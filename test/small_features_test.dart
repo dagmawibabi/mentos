@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mentos/core/crypto/crypto.dart';
 import 'package:mentos/data/models.dart';
 import 'package:mentos/features/feed/post_screen.dart';
+import 'package:mentos/net/atlas.dart';
 import 'package:mentos/net/engine.dart';
 import 'package:mentos/net/market/market.dart';
 import 'package:mentos/net/views.dart';
@@ -77,6 +78,30 @@ void main() {
       engines.add(e);
       return e;
     }
+
+    test('nodes announce signed beacons into the atlas, and opting out stops it', () async {
+      final a = await person();
+      final b = await person();
+      final c = await person();
+      await a.atlas!.announce(force: true);
+      await b.atlas!.announce(force: true);
+      await eventually(() => c.atlas!.nodes().map((x) => x.id).toSet().containsAll({a.me.id, b.me.id}));
+      expect(c.atlas!.beacon(a.me.id)!.mode, 'standard');
+
+      // A forged beacon for someone else is ignored.
+      final real = c.atlas!.beacon(a.me.id)!;
+      final forged = Beacon(id: real.id, relay: 'https://evil.example', mode: real.mode, links: 99, ts: real.ts + 1, sig: real.sig);
+      await c.atlas!.onGossip(b.me.id, {'op': 'b', 'b': forged.toJson()});
+      expect(c.atlas!.beacon(a.me.id)!.links, real.links);
+
+      // A late joiner gets a snapshot when it links up.
+      final late = await person();
+      await a.atlas!.onPeer(late.me.id);
+      await eventually(() => late.atlas!.beacon(b.me.id) != null);
+
+      b.atlas!.announcing = false;
+      expect(b.atlas!.announcing, isFalse);
+    });
 
     test('a public space is listed network-wide and a stranger joins from the directory', () async {
       final owner = await person();

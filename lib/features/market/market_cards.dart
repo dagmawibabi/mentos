@@ -401,6 +401,13 @@ class ProviderCard extends ConsumerWidget {
                 price: compute['perUnit'] as int,
                 per: 'unit',
               ),
+            if (l.body['sandbox'] is Map)
+              _OfferLine(
+                icon: Icons.terminal_rounded,
+                title: 'Sandbox · ${(l.body['sandbox'] as Map)['mb']} MB, scripts and files',
+                price: (l.body['sandbox'] as Map)['perHour'] as int,
+                per: 'hour',
+              ),
           ],
         ),
       ),
@@ -540,66 +547,3 @@ class _SponsoredCardState extends ConsumerState<SponsoredCard> {
   }
 }
 
-/// A declarative plugin pack.
-class PackCard extends ConsumerWidget {
-  const PackCard({super.key, required this.title, required this.about, required this.kind, required this.pack,
-      required this.price, required this.installed, required this.onTap});
-  final String title;
-  final String about;
-  final String kind;
-  final Map pack;
-  final int price;
-  final bool installed;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final p = context.pal;
-    final preview = switch (kind) {
-      'stickers' => ((pack['emoji'] as List?) ?? const []).take(6).join(' '),
-      'phrases' => '“${((pack['lines'] as List?) ?? const ['']).first}”',
-      _ => 'Accent: ${pack['accent']}',
-    };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.md),
-      child: MCard(
-        onTap: onTap,
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(14)),
-              child: Icon(
-                switch (kind) {
-                  'stickers' => Icons.emoji_emotions_outlined,
-                  'phrases' => Icons.short_text_rounded,
-                  _ => Icons.palette_outlined,
-                },
-                color: p.inkSoft,
-              ),
-            ),
-            const SizedBox(width: Space.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: Txt.bodyStrong(p.ink)),
-                  const SizedBox(height: 2),
-                  Text(preview, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.inkSoft)),
-                  if (about.isNotEmpty)
-                    Text(about, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.muted)),
-                ],
-              ),
-            ),
-            const SizedBox(width: Space.sm),
-            installed
-                ? Pill('Installed', fg: p.accent, bg: p.accentSoft, icon: Icons.check_rounded)
-                : (price == 0 ? Text('Free', style: Txt.bodyStrong(p.accent)) : Amount(price, size: 14)),
-          ],
-        ),
-      ),
-    );
-  }
-}

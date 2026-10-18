@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../plugins/plugin_providers.dart';
+import '../plugins/plugins_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -25,187 +27,305 @@ class MyProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.pal;
     final e = ref.watch(maybeEngineProvider);
     if (e == null) return const SizedBox.shrink();
     final me = ref.watch(myProfileProvider).value ?? e.myProfile;
-    final posts =
-        ref.watch(authorFeedProvider(e.me.id)).value ?? const <PostView>[];
+    final posts = ref.watch(authorFeedProvider(e.me.id)).value ?? const <PostView>[];
     final people = ref.watch(peopleProvider).value ?? const <Peer>[];
     final grants = ref.watch(grantsProvider).value ?? const <Grant>[];
-    final keepers = grants
-        .where((g) => g.dir == GrantDir.out && g.state == GrantState.active)
-        .map((g) => g.peer)
-        .toSet();
+    final stories = ref.watch(storiesProvider).value ?? const <StoryGroup>[];
+    final mine = stories.where((g) => g.author == e.me.id).firstOrNull;
+    final keepers = grants.where((g) => g.dir == GrantDir.out && g.state == GrantState.active).map((g) => g.peer).toSet();
+    final followers = people.where((x) => x.followsMe).length;
+    final following = people.where((x) => x.iFollow).length;
+
+    Future<void> host() async {
+      try {
+        final n = await hostPickedFiles(context, e);
+        if (n > 0 && context.mounted) toast(context, 'Hosting');
+      } catch (err) {
+        if (context.mounted) toast(context, 'Could not host: $err');
+      }
+    }
 
     return DefaultTabController(
       length: 4,
       child: Scaffold(
-        appBar: AppBar(
-          title: const Text('You'),
-          actions: [
-            IconBtn(
-              Icons.insights_outlined,
-              tooltip: 'Insights',
-              onTap: () => context.push('/insights'),
-            ),
-            IconBtn(
-              Icons.data_object_rounded,
-              tooltip: 'Data explorer',
-              onTap: () => context.push('/data'),
-            ),
-            IconBtn(
-              Icons.info_outline_rounded,
-              tooltip: 'Technical',
-              onTap: () => showPeerTech(context, e.me.id),
-            ),
-            IconBtn(
-              Icons.qr_code_rounded,
-              tooltip: 'My code',
-              onTap: () => context.push('/connect'),
-            ),
-            IconBtn(
-              Icons.settings_outlined,
-              tooltip: 'Settings',
-              onTap: () => context.push('/settings'),
-            ),
-            const SizedBox(width: 8),
-          ],
-        ),
-        body: Column(
-          children: [
-            ProfileHeader(
-              id: e.me.id,
-              name: me.displayName,
-              bio: me.bio,
-              onEdit: () => context.push('/edit-profile'),
-              stats: [
-                (posts.length, 'posts', null),
-                (
-                  people.where((x) => x.iFollow).length,
-                  'following',
-                  () => context.push('/people?tab=0'),
+        body: NestedScrollView(
+          headerSliverBuilder: (context, _) => [
+            SliverAppBar(
+              pinned: true,
+              title: const Text('You'),
+              actions: [
+                IconBtn(Icons.qr_code_rounded, tooltip: 'My code', onTap: () => context.push('/connect')),
+                IconBtn(Icons.settings_outlined, tooltip: 'Settings', onTap: () => context.push('/settings')),
+                PopupMenuButton<String>(
+                  tooltip: 'More',
+                  icon: const Icon(Icons.more_vert_rounded),
+                  onSelected: (v) => switch (v) {
+                    'insights' => context.push('/insights'),
+                    'data' => context.push('/data'),
+                    'custody' => context.push('/custody'),
+                    _ => showPeerTech(context, e.me.id),
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'insights', child: ListTile(leading: Icon(Icons.insights_outlined), title: Text('Insights'), dense: true)),
+                    PopupMenuItem(value: 'data', child: ListTile(leading: Icon(Icons.data_object_rounded), title: Text('Data explorer'), dense: true)),
+                    PopupMenuItem(value: 'custody', child: ListTile(leading: Icon(Icons.inventory_2_outlined), title: Text('Who holds what'), dense: true)),
+                    PopupMenuItem(value: 'tech', child: ListTile(leading: Icon(Icons.info_outline_rounded), title: Text('Technical details'), dense: true)),
+                  ],
                 ),
-                (
-                  people.where((x) => x.followsMe).length,
-                  'followers',
-                  () => context.push('/people?tab=1'),
-                ),
-                (keepers.length, 'keep you', () => context.go('/network')),
+                const SizedBox(width: 4),
               ],
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.gutter,
-                0,
-                Space.gutter,
-                Space.sm,
-              ),
-              child: Row(
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () async {
-                        try {
-                          final n = await hostPickedFiles(context, e);
-                          if (n > 0 && context.mounted)
-                            toast(context, 'Hosting');
-                        } catch (err) {
-                          if (context.mounted)
-                            toast(context, 'Could not host: $err');
-                        }
-                      },
-                      icon: const Icon(Icons.hub_outlined, size: 16),
-                      label: const Text(
-                        'Host a file',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: Space.sm),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () => context.push('/transfer'),
-                      icon: const Icon(Icons.swap_horiz_rounded, size: 16),
-                      label: const Text(
-                        'Transfer',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: Space.sm),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () => context.push('/files'),
-                      icon: const Icon(Icons.folder_outlined, size: 16),
-                      label: const Text(
-                        'Files',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const TabBar(
-              tabs: [
-                Tab(text: 'Posts'),
-                Tab(text: 'Bookmarks'),
-                Tab(text: 'Activity'),
-                Tab(text: 'Hosted'),
-              ],
-            ),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  posts.isEmpty
-                      ? EmptyState(
-                          icon: Icons.edit_note_rounded,
-                          title: 'Nothing posted yet',
-                          body: 'Your posts are stored here and reach followers directly.',
-                          compact: true,
-                          action: OutlinedButton(
-                            onPressed: () => context.push('/compose'),
-                            child: const Text('Write a post'),
+                  // ------------------------------------------------ identity
+                  SizedBox(
+                    height: 170,
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: Space.gutter,
+                          right: Space.gutter,
+                          top: 0,
+                          height: 112,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(22),
+                            child: ProfileCover(id: e.me.id, cover: me.cover),
                           ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(
-                            0,
-                            Space.md,
-                            0,
-                            Space.xl,
-                          ),
-                          itemCount: posts.length,
-                          itemBuilder: (_, i) => PostCard(post: posts[i]),
                         ),
-                  const BookmarksScreen(embedded: true),
-                  const ActivityScreen(embedded: true),
-                  ListView(
-                    children: [HostedList(author: e.me.id, compact: true)],
+                        Positioned(
+                          left: Space.gutter + Space.md,
+                          bottom: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(3),
+                            decoration: BoxDecoration(color: p.bg, borderRadius: BorderRadius.circular(40)),
+                            child: StoryAvatar(
+                              id: e.me.id,
+                              size: 80,
+                              story: mine != null,
+                              onTap: () => context.push(mine != null ? '/story/${e.me.id}' : '/story/new'),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          right: Space.gutter + Space.xs,
+                          bottom: 0,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(visualDensity: VisualDensity.compact, backgroundColor: p.bg),
+                            icon: const Icon(Icons.edit_outlined, size: 16),
+                            label: const Text('Edit profile'),
+                            onPressed: () => context.push('/edit-profile'),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
+                  const SizedBox(height: Space.sm),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: Space.gutter + Space.xs),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(me.displayName, style: Txt.display(p.ink).copyWith(fontSize: 24, height: 1.15)),
+                        const SizedBox(height: 4),
+                        GestureDetector(
+                          onTap: () {
+                            Clipboard.setData(ClipboardData(text: e.me.id));
+                            toast(context, 'Key copied');
+                          },
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(shortId(e.me.id), style: Txt.mono(p.muted)),
+                              const SizedBox(width: 6),
+                              Icon(Icons.copy_rounded, size: 13, color: p.faint),
+                              const SizedBox(width: 10),
+                              Container(width: 7, height: 7, decoration: BoxDecoration(shape: BoxShape.circle, color: e.running ? p.accent : p.faint)),
+                              const SizedBox(width: 5),
+                              Text(e.running ? 'online' : 'offline', style: Txt.mono(e.running ? p.accent : p.muted, size: 11)),
+                            ],
+                          ),
+                        ),
+                        if (me.bio.isNotEmpty) ...[
+                          const SizedBox(height: Space.sm),
+                          Text(me.bio, style: Txt.body(p.inkSoft)),
+                        ] else ...[
+                          const SizedBox(height: Space.sm),
+                          GestureDetector(
+                            onTap: () => context.push('/edit-profile'),
+                            child: Text('Add a bio so people know it\'s you', style: Txt.small(p.accent)),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: Space.lg),
+
+                  // ------------------------------------------------ stats
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                    child: Container(
+                      decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+                      clipBehavior: Clip.antiAlias,
+                      child: IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _Stat(posts.length, 'Posts', null),
+                            VerticalDivider(width: 1, color: p.line),
+                            _Stat(followers, 'Followers', () => context.push('/people?tab=1')),
+                            VerticalDivider(width: 1, color: p.line),
+                            _Stat(following, 'Following', () => context.push('/people?tab=0')),
+                            VerticalDivider(width: 1, color: p.line),
+                            _Stat(keepers.length, 'Keep you', () => context.push('/custody')),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: Space.md),
+
+                  // ------------------------------------------------ actions
+                  if (!ref.watch(pluginLayoutProvider).hide.contains('quickActions'))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: Space.gutter - 4),
+                    child: Row(
+                      children: [
+                        _Quick(Icons.edit_note_rounded, 'Post', const Color(0xFF0E9F6E), () => context.push('/compose')),
+                        _Quick(Icons.amp_stories_outlined, 'Story', const Color(0xFFDB2777), () => context.push('/story/new')),
+                        _Quick(Icons.hub_outlined, 'Host', const Color(0xFF6366F1), host),
+                        _Quick(Icons.swap_horiz_rounded, 'Transfer', const Color(0xFF0EA5E9), () => context.push('/transfer')),
+                        _Quick(Icons.folder_outlined, 'Files', const Color(0xFFD97706), () => context.push('/files')),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: Space.md),
+
+                  const PluginSlotView('profile.top', padding: EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm)),
+                  const SizedBox(height: Space.sm),
                 ],
               ),
             ),
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _TabsBar(
+                bg: p.bg,
+                bar: const TabBar(
+                  tabs: [
+                    Tab(text: 'Posts'),
+                    Tab(text: 'Saved'),
+                    Tab(text: 'Activity'),
+                    Tab(text: 'Hosted'),
+                  ],
+                ),
+              ),
+            ),
           ],
+          body: TabBarView(
+            children: [
+              posts.isEmpty
+                  ? EmptyState(
+                      icon: Icons.edit_note_rounded,
+                      title: 'Nothing posted yet',
+                      body: 'Your posts are stored here and reach followers directly.',
+                      compact: true,
+                      action: OutlinedButton(onPressed: () => context.push('/compose'), child: const Text('Write a post')),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(0, Space.md, 0, Space.xl),
+                      itemCount: posts.length,
+                      itemBuilder: (_, i) => PostCard(post: posts[i]),
+                    ),
+              const BookmarksScreen(embedded: true),
+              const ActivityScreen(embedded: true),
+              ListView(children: [HostedList(author: e.me.id, compact: true)]),
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat(this.value, this.label, this.onTap);
+  final int value;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            children: [
+              Text(compact(value), style: Txt.heading(p.ink).copyWith(fontSize: 19)),
+              const SizedBox(height: 2),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.muted).copyWith(fontSize: 11.5)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Quick extends StatelessWidget {
+  const _Quick(this.icon, this.label, this.tint, this.onTap);
+  final IconData icon;
+  final String label;
+  final Color tint;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    return Expanded(
+      child: Pressable(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Column(
+            children: [
+              Container(
+                height: 48,
+                decoration: BoxDecoration(color: tint.withValues(alpha: .12), borderRadius: BorderRadius.circular(16)),
+                child: Center(child: Icon(icon, color: tint, size: 22)),
+              ),
+              const SizedBox(height: 5),
+              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.inkSoft).copyWith(fontSize: 11.5)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TabsBar extends SliverPersistentHeaderDelegate {
+  _TabsBar({required this.bar, required this.bg});
+  final TabBar bar;
+  final Color bg;
+
+  @override
+  double get minExtent => bar.preferredSize.height;
+  @override
+  double get maxExtent => bar.preferredSize.height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) => Container(color: bg, child: bar);
+
+  @override
+  bool shouldRebuild(covariant _TabsBar old) => old.bg != bg;
 }
 
 class ProfileScreen extends ConsumerWidget {
@@ -221,6 +341,7 @@ class ProfileScreen extends ConsumerWidget {
     final online = ref.watch(onlineProvider(id)).value ?? false;
     final posts = ref.watch(authorFeedProvider(id)).value ?? const <PostView>[];
     final canPreserve = peer.profile?.keepPosts ?? false;
+    final theirStory = (ref.watch(storiesProvider).value ?? const <StoryGroup>[]).where((g) => g.author == id).firstOrNull;
 
     return Scaffold(
       appBar: AppBar(
@@ -240,8 +361,19 @@ class ProfileScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.only(bottom: Space.xxl),
         children: [
+          if (peer.profile?.cover != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.sm),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(22),
+                child: SizedBox(height: 112, child: ProfileCover(id: id, cover: peer.profile!.cover)),
+              ),
+            ),
           ProfileHeader(
             id: id,
+            story: theirStory != null,
+            storySeen: theirStory?.allSeen ?? false,
+            onAvatar: theirStory == null ? null : () => context.push('/story/$id'),
             name: peer.name,
             bio: peer.profile?.bio ?? '',
             status: online ? null : lastSeen(peer.lastSeen),

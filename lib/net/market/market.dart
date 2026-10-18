@@ -15,6 +15,7 @@ import '../../data/models.dart';
 import '../engine.dart';
 import '../pay/coin.dart';
 import '../transport.dart';
+import '../../plugins/script.dart';
 import 'listing.dart';
 
 export 'listing.dart';
@@ -23,6 +24,7 @@ part 'orders.dart';
 part 'tasks.dart';
 part 'ads.dart';
 part 'resources.dart';
+part 'sandbox.dart';
 part 'exchange.dart';
 part 'probe.dart';
 part 'spaces.dart';
@@ -374,6 +376,10 @@ class Market {
       case 'job':
       case 'job-up':
         await _onResourceMessage(from, m);
+      case 'box':
+        await _onBox(from, m);
+      case 'box-up':
+        await _onBoxUp(from, m);
       case 'trade':
       case 'trade-up':
         await _onTradeMessage(from, m);
@@ -617,6 +623,8 @@ class Market {
         id: 'mk:$id:$what:${nowMs() ~/ 1000}',
         kind: 'market',
         actor: who,
+        ref: route,
+        scope: what,
         ts: nowMs(),
         text: text,
       ),
@@ -646,6 +654,7 @@ class Market {
     await _ordersTick();
     await _adsTick();
     await _resourcesTick();
+    await _boxesTick();
     await _tradesTick();
     await _spacesTick();
   }
@@ -720,57 +729,24 @@ class Market {
   }
 
   // ---------------------------------------------------------------------------
-  // plugins (declarative packs)
+  // plugins
 
-  static const starterPacks = <Map<String, dynamic>>[
-    {
-      'id': 'builtin:celebrate',
-      'title': 'Small celebrations',
-      'about': 'A little encouragement for every finished task.',
-      'plugin': 'stickers',
-      'pack': {
-        'emoji': ['🙌', '🌱', '🎉', '💪', '☕', '✨'],
-      },
-    },
-    {
-      'id': 'builtin:work',
-      'title': 'Working together',
-      'about': 'Useful replies for agreeing on work and sharing progress.',
-      'plugin': 'phrases',
-      'pack': {
-        'lines': [
-          'Thanks! I’ll review the details.',
-          'Here is my progress so far.',
-          'Could you clarify the acceptance criteria?',
-          'The work is ready for review.',
-        ],
-      },
-    },
-    {
-      'id': 'builtin:blue',
-      'title': 'Blue hour',
-      'about': 'A blue accent for light and dark themes.',
-      'plugin': 'theme',
-      'pack': {'accent': 'blue'},
-    },
+  /// Plugin listings that point at a real script.
+  List<Listing> pluginListings() => [
+    for (final l in listings(kind: Kinds.plugin))
+      if (!l.deleted && l.body['manifest'] is String && l.body['sha256'] is String) l,
   ];
 
-  /// Buys (when it has a price) and installs a pack listing.
-  Future<void> getPack(Listing l) async {
+  bool pluginPaid(Listing l) => l.price == 0 || l.author == me || engine.listingOwned(l.id);
+
+  /// Pays a priced plugin's publisher once. Installing is up to the caller,
+  /// which must show the permissions first.
+  Future<void> buyPlugin(Listing l) async {
     if (l.kind != Kinds.plugin) throw StateError('Not a plugin');
-    if (l.price > 0 && l.author != me && !engine.listingOwned(l.id)) {
+    if (!pluginPaid(l)) {
       await coin.payOnce(l.author, l.price, memo: 'plugin:${l.id.substring(0, math.min(l.id.length, 60))}');
     }
     engine.noteOwned(l.id);
-    await engine.installPlugin({
-      'id': l.id,
-      'title': l.title,
-      'about': l.about,
-      'minor': l.price,
-      'from': l.author,
-      'plugin': l.body['plugin'],
-      'body': l.body['pack'],
-    });
     _changed();
   }
 

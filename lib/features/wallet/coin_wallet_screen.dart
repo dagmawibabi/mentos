@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../plugins/plugins_screen.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,6 +12,7 @@ import '../../data/models.dart';
 import '../../net/pay/coin.dart';
 import '../../state/calls.dart';
 import '../../state/providers.dart';
+import '../../widgets/avatar.dart';
 import '../../widgets/ui.dart';
 import '../market/market_kit.dart';
 import 'ledger_screen.dart';
@@ -97,6 +99,8 @@ class CoinWalletScreen extends ConsumerWidget {
         ],
       ),
       body: ListView(
+        // Plugin cards sit under the balance.
+        key: const PageStorageKey('wallet'),
         padding: const EdgeInsets.only(bottom: Space.xxl),
         children: [
           Padding(
@@ -119,6 +123,7 @@ class CoinWalletScreen extends ConsumerWidget {
               onToggle: () => ref.read(walletHiddenProvider.notifier).toggle(),
             ),
           ),
+          const PluginSlotView('wallet.top'),
           Padding(
             padding: const EdgeInsets.fromLTRB(
               Space.gutter,
@@ -439,11 +444,7 @@ class _Entry extends ConsumerWidget {
     ].join(' · ');
     final positive = shown > 0;
     return ListTile(
-      onTap: () => showModalBottomSheet<void>(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) => _TxSheet(tx: tx, me: me),
-      ),
+      onTap: () => showTxSheet(context, tx, me),
       leading: CircleAvatar(
         backgroundColor: positive || tx.isMint ? p.accentSoft : p.raised,
         child: Icon(
@@ -1018,6 +1019,11 @@ class _TxSheetState extends ConsumerState<_TxSheet> {
     });
   }
 
+  void _copy(String text, String what) {
+    Clipboard.setData(ClipboardData(text: text));
+    toast(context, '$what copied');
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
@@ -1030,189 +1036,298 @@ class _TxSheetState extends ConsumerState<_TxSheet> {
     final index = chain.indexWhere((t) => t.hash == tx.hash);
     final shape = tx.problem();
     final view = coin?.view();
-    final shown = view == null
-        ? (incoming ? tx.amount : -tx.amount)
-        : walletDelta(view, tx, me);
+    final shown = view == null ? (incoming ? tx.amount : -tx.amount) : walletDelta(view, tx, me);
     final conf = coin?.confirmation(tx.hash);
-    return DraggableScrollableSheet(
-      expand: false,
-      initialChildSize: .82,
-      minChildSize: .4,
-      maxChildSize: .95,
-      builder: (_, scroll) => Material(
-        color: p.bg,
-        borderRadius: const BorderRadius.vertical(
-          top: Radius.circular(Radii.lg),
-        ),
-        child: ListView(
-          controller: scroll,
-          padding: const EdgeInsets.fromLTRB(
-            Space.gutter,
-            Space.md,
-            Space.gutter,
-            Space.xl,
-          ),
+    final voided = view != null && view.voided.contains(tx.hash);
+
+    final (String title, IconData icon, Color tint) = switch (tx.kind) {
+      'mint' => ('Welcome grant', Icons.auto_awesome_rounded, p.accent),
+      'lock' => ('Escrow hold', Icons.lock_outline_rounded, const Color(0xFFD97706)),
+      'ack' => ('Hold accepted', Icons.handshake_outlined, const Color(0xFF0EA5E9)),
+      'release' => ('Released from escrow', Icons.lock_open_rounded, p.accent),
+      'refund' => ('Refunded', Icons.undo_rounded, const Color(0xFF6366F1)),
+      'cancel' => ('Hold cancelled', Icons.block_rounded, p.muted),
+      'claim' => ('Claimed', Icons.download_done_rounded, p.accent),
+      'dispute' => ('Disputed', Icons.gavel_rounded, p.danger),
+      'reward' => ('Reward', Icons.emoji_events_outlined, const Color(0xFFD97706)),
+      _ => incoming ? ('Received', Icons.south_west_rounded, p.accent) : ('Sent', Icons.north_east_rounded, p.ink),
+    };
+    final (String status, IconData statusIcon, Color statusColor) = voided
+        ? ('No effect', Icons.remove_circle_outline_rounded, p.muted)
+        : switch (conf?.state) {
+            Settle.final_ => ('Final', Icons.verified_rounded, p.accent),
+            Settle.witnessed => ('Witnessed', Icons.task_alt_rounded, p.accent),
+            Settle.accepted => ('Accepted', Icons.check_circle_outline_rounded, const Color(0xFF0EA5E9)),
+            Settle.conflicted => ('Conflicted', Icons.warning_amber_rounded, p.danger),
+            _ => ('Pending', Icons.schedule_rounded, const Color(0xFFD97706)),
+          };
+
+    Widget card(List<Widget> children) => Container(
+      margin: const EdgeInsets.only(top: Space.md),
+      decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+      clipBehavior: Clip.antiAlias,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
+
+    Widget row(String label, String value, {String? copy, VoidCallback? onTap, Widget? trailing, bool first = false, bool mono = false}) => InkWell(
+      onTap: onTap ?? (copy == null || copy.isEmpty ? null : () => _copy(copy, label)),
+      child: Container(
+        decoration: BoxDecoration(border: first ? null : Border(top: BorderSide(color: p.line))),
+        padding: const EdgeInsets.symmetric(horizontal: Space.md, vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: p.line,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: Space.lg),
-            Text(
-              tx.isMint
-                  ? 'WELCOME GRANT'
-                  : tx.kind != 'send'
-                  ? tx.kind.toUpperCase()
-                  : incoming
-                  ? 'RECEIVED'
-                  : 'SENT',
-              style: Txt.mono(p.faint, size: 11, w: FontWeight.w500),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              Coin.format(shown, sign: true),
-              style: Txt.display(incoming || tx.isMint ? p.accent : p.ink)
-                  .copyWith(fontSize: 40, height: 1.05),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              tx.isMint ? 'Signed by this identity, once' : written(tx.ts),
-              style: Txt.small(p.muted),
-            ),
-            const SizedBox(height: Space.lg),
-            _Line(
-              'from',
-              e.nameOf(tx.from),
-              onOpen: () => context.push('/u/${tx.from}'),
-            ),
-            _Line('from address', tx.from, copy: tx.from),
-            _Line(
-              'to',
-              e.nameOf(tx.to),
-              onOpen: () => context.push('/u/${tx.to}'),
-            ),
-            _Line('to address', tx.to, copy: tx.to),
-            _Line(
-              'amount',
-              '${Coin.format(tx.amount)} Mentos · ${tx.amount} minor units',
-              copy: '${tx.amount}',
-            ),
-            if (tx.kind == 'send')
-              _Line(
-                'network fee',
-                '${Coin.format(Coin.serviceFee(tx.amount, tx.memo))} Mentos',
-              ),
-            _Line('note', tx.memo.isEmpty ? '—' : tx.memo, copy: tx.memo),
-            if (conf != null)
-              _Line(
-                'ledger',
-                conf.state == Settle.pending
-                    ? 'not counted by this phone'
-                    : '${conf.label} · ${conf.witnesses} witnesses holding ${Coin.format(conf.stake)}',
-              ),
-            if (view != null && view.voided.contains(tx.hash))
-              _Line(
-                'effect',
-                'none: the hold had already changed when this arrived',
-              ),
-            if (tx.esc != null) _Line('escrow', tx.esc!, copy: tx.esc!),
-            if (tx.until != null) _Line('deadline', written(tx.until!)),
-            if (tx.ackBy != null) _Line('accept by', written(tx.ackBy!)),
-            if (tx.arbiter != null)
-              _Line(
-                'arbiter',
-                e.nameOf(tx.arbiter!),
-                onOpen: () => context.push('/u/${tx.arbiter}'),
-              ),
-            _Line('kind', tx.kind, copy: ''),
-            _Line('sequence', '${tx.seq}', copy: '${tx.seq}'),
-            _Line(
-              'place in chain',
-              index < 0
-                  ? 'not in the kept chain'
-                  : '${index + 1} of ${chain.length}',
-              copy: '',
-            ),
-            _Line(
-              'previous',
-              tx.prev == Coin.genesis ? 'genesis' : tx.prev,
-              copy: tx.prev,
-            ),
-            _Line('hash', tx.hash, copy: tx.hash),
-            _Line(
-              'signature',
-              _signed == null
-                  ? 'checking'
-                  : _signed!
-                  ? 'Ed25519, valid'
-                  : 'does not verify',
-              copy: tx.sig,
-            ),
-            _Line('shape', shape ?? 'accepted by the ledger rules', copy: ''),
-            _Line(
-              'signed at',
-              written(tx.ts),
-              copy: tx.ts == 0 ? '' : '${tx.ts}',
-            ),
-            _Line('topic', Coin.topicLabel, copy: Coin.topic),
-            const SizedBox(height: Space.md),
-            Text('Signed bytes', style: Txt.mono(p.faint, size: 11)),
-            const SizedBox(height: 6),
-            GestureDetector(
-              onTap: () {
-                Clipboard.setData(ClipboardData(text: tx.body));
-                toast(context, 'Signed bytes copied');
-              },
-              child: Text(tx.body, style: Txt.mono(p.ink, size: 11)),
-            ),
-            const SizedBox(height: Space.md),
-            Text(
-              'Phones that have seen this payment and the ones before it count the same balance. '
-              'Every phone votes for the first payment it sees at each place in a chain; a competing one only wins with more witness stake.',
-              style: Txt.small(p.muted),
-            ),
+            SizedBox(width: 104, child: Text(label, style: Txt.small(p.muted))),
+            Expanded(child: Text(value, style: mono ? Txt.mono(p.ink, size: 11.5) : Txt.body(p.ink).copyWith(fontSize: 14))),
+            if (trailing != null) trailing else if (copy != null && copy.isNotEmpty) Icon(Icons.copy_rounded, size: 14, color: p.faint),
           ],
         ),
       ),
     );
-  }
-}
 
-class _Line extends StatelessWidget {
-  const _Line(this.label, this.value, {this.copy = '', this.onOpen});
-  final String label;
-  final String value;
-  final String copy;
-  final VoidCallback? onOpen;
+    Widget party(String label, String id) => Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => context.push('/u/$id'),
+        child: Padding(
+          padding: const EdgeInsets.all(Space.sm),
+          child: Column(
+            children: [
+              Avatar(id: id, size: 46, presence: false),
+              const SizedBox(height: 6),
+              Text(label, style: Txt.label(p.faint)),
+              const SizedBox(height: 2),
+              Text(id == me ? 'You' : e.nameOf(id), maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink).copyWith(fontSize: 14)),
+              Text('${id.substring(0, 6)}…${id.substring(id.length - 4)}', style: Txt.mono(p.muted, size: 10.5)),
+            ],
+          ),
+        ),
+      ),
+    );
 
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    return InkWell(
-      onTap:
-          onOpen ??
-          (copy.isEmpty
-              ? null
-              : () {
-                  Clipboard.setData(ClipboardData(text: copy));
-                  toast(context, 'Copied');
-                }),
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: .78,
+      minChildSize: .4,
+      maxChildSize: .95,
+      builder: (_, scroll) => Material(
+        color: p.bg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+        clipBehavior: Clip.antiAlias,
+        child: ListView(
+          controller: scroll,
+          padding: EdgeInsets.zero,
           children: [
-            SizedBox(
-              width: 108,
-              child: Text(label, style: Txt.mono(p.faint, size: 11)),
+            // ---------------------------------------------------- hero
+            Container(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, Space.xl),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [tint.withValues(alpha: p.isDark ? .07 : .12), p.bg],
+                ),
+              ),
+              child: Column(
+                children: [
+                  Container(width: 36, height: 4, decoration: BoxDecoration(color: p.line, borderRadius: BorderRadius.circular(2))),
+                  const SizedBox(height: Space.lg),
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(color: tint.withValues(alpha: .16), shape: BoxShape.circle),
+                    child: Icon(icon, color: tint == p.ink ? p.inkSoft : tint, size: 28),
+                  ),
+                  const SizedBox(height: Space.md),
+                  Text(title, style: Txt.bodyStrong(p.inkSoft)),
+                  const SizedBox(height: 4),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: Coin.format(shown, sign: true)),
+                          TextSpan(text: ' MNT', style: Txt.heading(p.muted).copyWith(fontSize: 18)),
+                        ],
+                      ),
+                      style: Txt.display(shown > 0 || tx.isMint ? p.accent : p.ink).copyWith(fontSize: 42, height: 1.05, fontFeatures: const [FontFeature.tabularFigures()]),
+                    ),
+                  ),
+                  const SizedBox(height: Space.sm),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(color: statusColor.withValues(alpha: .12), borderRadius: BorderRadius.circular(Radii.pill)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(statusIcon, size: 14, color: statusColor),
+                            const SizedBox(width: 5),
+                            Text(status, style: Txt.small(statusColor).copyWith(fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
+                      Text(tx.ts == 0 ? 'at the start of this identity' : written(tx.ts), style: Txt.small(p.muted)),
+                    ],
+                  ),
+                  if (tx.memo.isNotEmpty && !tx.isEscrowOp && tx.kind != 'lock') ...[
+                    const SizedBox(height: Space.md),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(14), border: Border.all(color: p.line)),
+                      child: Text('“${tx.memo}”', textAlign: TextAlign.center, style: Txt.body(p.ink)),
+                    ),
+                  ],
+                ],
+              ),
             ),
-            Expanded(child: Text(value, style: Txt.mono(p.ink, size: 11.5))),
+
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.xl),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // -------------------------------------------- parties
+                  if (!tx.isMint)
+                    Container(
+                      padding: const EdgeInsets.symmetric(vertical: Space.sm),
+                      decoration: BoxDecoration(color: p.surface, borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+                      child: Row(
+                        children: [
+                          party('FROM', tx.from),
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(color: p.raised, shape: BoxShape.circle),
+                            child: Icon(Icons.arrow_forward_rounded, size: 16, color: p.muted),
+                          ),
+                          party('TO', tx.to),
+                        ],
+                      ),
+                    ),
+
+                  // -------------------------------------------- details
+                  card([
+                    row('Amount', '${Coin.format(tx.amount)} MNT', copy: '${tx.amount}', first: true),
+                    if (tx.kind == 'send') row('Network fee', '${Coin.format(Coin.serviceFee(tx.amount, tx.memo))} MNT'),
+                    if (tx.kind == 'lock') row('For', _memoLabel(tx.memo)),
+                    if (conf != null)
+                      row(
+                        'Ledger',
+                        conf.state == Settle.pending ? 'Not counted by this phone yet' : '${conf.label} by ${conf.witnesses} witness${conf.witnesses == 1 ? '' : 'es'} holding ${Coin.format(conf.stake)} MNT',
+                      ),
+                    if (voided) row('Effect', 'None. The hold had already changed when this arrived.'),
+                    if (tx.esc != null) row('Escrow', '${tx.esc!.substring(0, 12)}…', copy: tx.esc!),
+                    if (tx.until != null) row('Deadline', written(tx.until!)),
+                    if (tx.ackBy != null) row('Accept by', written(tx.ackBy!)),
+                    if (tx.arbiter != null) row('Arbiter', e.nameOf(tx.arbiter!), onTap: () => context.push('/u/${tx.arbiter}'), trailing: Icon(Icons.chevron_right_rounded, size: 18, color: p.faint)),
+                  ]),
+
+                  // -------------------------------------------- proof
+                  card([
+                    Padding(
+                      padding: const EdgeInsets.all(Space.md),
+                      child: Row(
+                        children: [
+                          Icon(
+                            _signed == null ? Icons.hourglass_top_rounded : (_signed! ? Icons.gpp_good_rounded : Icons.gpp_bad_rounded),
+                            color: _signed == false ? p.danger : p.accent,
+                          ),
+                          const SizedBox(width: Space.md),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _signed == null ? 'Checking the signature…' : (_signed! ? 'Signed and valid' : 'Signature does not verify'),
+                                  style: Txt.bodyStrong(p.ink).copyWith(fontSize: 14),
+                                ),
+                                Text(
+                                  [
+                                    'Ed25519',
+                                    index < 0 ? 'not in the kept chain' : 'payment ${index + 1} of ${chain.length} in the sender\'s chain',
+                                    if (shape != null) shape,
+                                  ].join(' · '),
+                                  style: Txt.small(p.muted),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    row('Hash', '${tx.hash.substring(0, 20)}…', copy: tx.hash, mono: true),
+                  ]),
+
+                  // -------------------------------------------- technical
+                  Container(
+                    margin: const EdgeInsets.only(top: Space.md),
+                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(18), border: Border.all(color: p.line)),
+                    clipBehavior: Clip.antiAlias,
+                    child: Material(
+                      color: p.surface,
+                      child: Theme(
+                      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                      child: ExpansionTile(
+                        tilePadding: const EdgeInsets.symmetric(horizontal: Space.md),
+                        leading: Icon(Icons.data_object_rounded, color: p.muted, size: 20),
+                        title: Text('Technical details', style: Txt.body(p.ink).copyWith(fontSize: 14)),
+                        children: [
+                          row('Kind', tx.kind),
+                          row('Sequence', '${tx.seq}', copy: '${tx.seq}'),
+                          row('Previous', tx.prev == Coin.genesis ? 'genesis' : '${tx.prev.substring(0, 20)}…', copy: tx.prev, mono: true),
+                          row('Signature', '${tx.sig.substring(0, 20)}…', copy: tx.sig, mono: true),
+                          row('From address', tx.from, copy: tx.from, mono: true),
+                          row('To address', tx.to, copy: tx.to, mono: true),
+                          row('Topic', Coin.topicLabel, copy: Coin.topic, mono: true),
+                          row('Signed bytes', tx.body, copy: tx.body, mono: true),
+                          Padding(
+                            padding: const EdgeInsets.all(Space.md),
+                            child: Text(
+                              'Phones that have seen this payment and the ones before it count the same balance. Every phone votes for the first payment it sees at each place in a chain; a competing one only wins with more witness stake.',
+                              style: Txt.small(p.muted),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ),
+                  ),
+
+                  // -------------------------------------------- actions
+                  const SizedBox(height: Space.lg),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.copy_rounded, size: 16),
+                          label: const Text('Copy hash'),
+                          onPressed: () => _copy(tx.hash, 'Hash'),
+                        ),
+                      ),
+                      if (!tx.isMint && !tx.isEscrowOp && tx.kind != 'lock') ...[
+                        const SizedBox(width: Space.sm),
+                        Expanded(
+                          child: FilledButton.icon(
+                            icon: Icon(incoming ? Icons.reply_rounded : Icons.replay_rounded, size: 16),
+                            label: Text(incoming ? 'Pay back' : 'Pay again'),
+                            onPressed: () {
+                              Navigator.pop(context);
+                              sendMentos(context, preset: incoming ? tx.from : tx.to);
+                            },
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -1224,5 +1339,6 @@ class _Line extends StatelessWidget {
 Future<void> showTxSheet(BuildContext context, CoinTx tx, String me) => showModalBottomSheet<void>(
   context: context,
   isScrollControlled: true,
+  backgroundColor: Colors.transparent,
   builder: (_) => _TxSheet(tx: tx, me: me),
 );

@@ -15,6 +15,8 @@ import '../market/market_cards.dart';
 import '../market/market_kit.dart';
 import 'post_card.dart';
 import 'stories.dart';
+import '../../plugins/plugin_providers.dart';
+import '../plugins/plugins_screen.dart';
 
 class FeedScreen extends ConsumerWidget {
   const FeedScreen({super.key});
@@ -27,11 +29,14 @@ class FeedScreen extends ConsumerWidget {
     final held = ref.watch(heldPostsProvider).value;
     final waiting = (held?.scheduled.length ?? 0) + (held?.drafts.length ?? 0);
     final net = ref.watch(netStatusProvider).value;
+    final layout = ref.watch(pluginLayoutProvider);
 
     return Scaffold(
-      floatingActionButton: _ComposeButton(
-        onTap: () => context.push('/compose'),
-      ),
+      floatingActionButton: layout.hide.contains('composeButton')
+          ? null
+          : _ComposeButton(
+              onTap: () => context.push('/compose'),
+            ),
       body: RefreshIndicator(
         color: p.ink,
         backgroundColor: p.surface,
@@ -105,7 +110,8 @@ class FeedScreen extends ConsumerWidget {
                   onTap: () => context.push('/drafts'),
                 ),
               ),
-            const SliverToBoxAdapter(child: StoriesBar()),
+            if (!layout.hide.contains('stories')) const SliverToBoxAdapter(child: StoriesBar()),
+            const SliverToBoxAdapter(child: PluginSlotView('feed.top')),
             ...feed.when(
               loading: () => [const SliverFillRemaining(child: Loading())],
               error: (e, _) => [

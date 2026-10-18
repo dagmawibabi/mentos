@@ -11,6 +11,7 @@ import '../../net/transport.dart';
 import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/tech.dart';
+import 'atlas_screen.dart';
 
 class NetworkMesh extends StatelessWidget {
   const NetworkMesh({
@@ -107,10 +108,12 @@ class NetworkMeshPage extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Mesh'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const IrohNetworkPage())),
-            child: const Text('Iroh'),
+          TextButton.icon(
+            onPressed: () => context.push('/atlas'),
+            icon: const Icon(Icons.travel_explore_rounded, size: 18),
+            label: const Text('Atlas'),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Column(
@@ -368,139 +371,10 @@ class _MeshPainter extends CustomPainter {
 }
 
 /// Relays and people this node can actually see. There is no public directory.
-class IrohNetworkPage extends ConsumerWidget {
+/// The old "Iroh network" page; everything it listed now lives in the atlas.
+class IrohNetworkPage extends StatelessWidget {
   const IrohNetworkPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final p = context.pal;
-    final e = ref.watch(maybeEngineProvider);
-    if (e == null) return const SizedBox.shrink();
-    final status = ref.watch(netStatusProvider).value;
-    final people = ref.watch(peopleProvider).value ?? const [];
-    final links = {for (final l in status?.links ?? const <LinkInfo>[]) l.peer: l};
-    final online = e.onlinePeers;
-    final known = {
-      for (final person in people) person.id: person,
-    };
-    final ids = <String>{
-      ...known.keys,
-      ...online,
-      ...links.keys,
-    }..remove(e.me.id);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('Iroh network')),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(Space.gutter, 8, Space.gutter, 32),
-        children: [
-          Text('This node', style: Txt.heading(p.ink)),
-          const SizedBox(height: 6),
-          Text(
-            'Relays forward encrypted packets when two phones cannot open a direct path. They do not store chats or posts. The list below is everyone this phone has met, plus anyone reachable right now.',
-            style: Txt.small(p.muted),
-          ),
-          const SizedBox(height: 12),
-          _CopyLine(label: 'node id', value: status?.nodeId ?? e.me.id),
-          _CopyLine(label: 'home relay', value: status?.relayUrl ?? 'none'),
-          _CopyLine(label: 'engine', value: status?.engine ?? 'offline'),
-          for (final addr in status?.directAddrs ?? const <String>[]) _CopyLine(label: 'direct', value: addr),
-          if ((status?.directAddrs ?? const []).isEmpty) _CopyLine(label: 'direct', value: 'no address yet'),
-          const SizedBox(height: 22),
-          Text('Relays', style: Txt.heading(p.ink)),
-          const SizedBox(height: 6),
-          if ((status?.relays ?? const []).isEmpty)
-            Text('No relay is listed yet. Connect, then pull to refresh the network tab.', style: Txt.small(p.muted))
-          else
-            for (final relay in status!.relays) _CopyLine(label: 'relay', value: relay),
-          const SizedBox(height: 22),
-          Text('People', style: Txt.heading(p.ink)),
-          const SizedBox(height: 6),
-          if (ids.isEmpty)
-            Text('Nobody else is known yet.', style: Txt.small(p.muted))
-          else
-            for (final id in ids.toList()..sort((a, b) {
-                final ao = online.contains(a) ? 0 : 1;
-                final bo = online.contains(b) ? 0 : 1;
-                if (ao != bo) return ao.compareTo(bo);
-                return e.nameOf(a).toLowerCase().compareTo(e.nameOf(b).toLowerCase());
-              }))
-              _PeerLine(
-                id: id,
-                name: known[id]?.name ?? e.nameOf(id),
-                online: online.contains(id),
-                kind: links[id]?.kind,
-              ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CopyLine extends StatelessWidget {
-  const _CopyLine({required this.label, required this.value});
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    return InkWell(
-      onTap: () {
-        Clipboard.setData(ClipboardData(text: value));
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 88, child: Text(label, style: Txt.mono(p.faint, size: 11))),
-            Expanded(child: Text(value, style: Txt.mono(p.ink, size: 12))),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PeerLine extends StatelessWidget {
-  const _PeerLine({required this.id, required this.name, required this.online, required this.kind});
-  final String id;
-  final String name;
-  final bool online;
-  final LinkKind? kind;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = context.pal;
-    final how = switch (kind) {
-      LinkKind.direct => 'direct',
-      LinkKind.relay => 'relay',
-      LinkKind.mixed => 'direct + relay',
-      LinkKind.none || null => online ? 'reachable' : 'known',
-    };
-    return InkWell(
-      onTap: () => showPeerTech(context, id),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(
-          children: [
-            Avatar(id: id, size: 36),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
-                  Text(how, style: Txt.mono(online ? p.accent : p.muted, size: 11)),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: p.faint),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const AtlasScreen();
 }

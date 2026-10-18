@@ -102,8 +102,10 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.pal;
+    // Scrolls instead of overflowing when it lands in a short box.
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
+        primary: false,
         padding: EdgeInsets.symmetric(
           horizontal: 40,
           vertical: compact ? 24 : 48,

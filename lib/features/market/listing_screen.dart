@@ -1,3 +1,8 @@
+import '../plugins/plugins_screen.dart';
+import '../../plugins/plugins.dart';
+import '../../plugins/plugin_providers.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -70,7 +75,7 @@ class ListingScreen extends ConsumerWidget {
               Kinds.ad => _AdView(l),
               Kinds.resource => _ResourceView(l),
               Kinds.exchange => _ExchangeView(l),
-              _ => _PackView(l),
+              _ => _PluginView(l),
             },
     );
   }
@@ -676,6 +681,7 @@ class _ResourceView extends ConsumerWidget {
     final net = (bench['net'] as Map?)?.cast<String, dynamic>() ?? const {};
     final storage = (l.body['storage'] as Map?)?.cast<String, dynamic>();
     final compute = (l.body['compute'] as Map?)?.cast<String, dynamic>();
+    final sandbox = (l.body['sandbox'] as Map?)?.cast<String, dynamic>();
     return ListView(
       padding: const EdgeInsets.only(bottom: Space.xxl),
       children: [
@@ -750,6 +756,59 @@ class _ResourceView extends ConsumerWidget {
               ),
             ),
           ),
+        if (sandbox != null)
+          _section(
+            context,
+            'Sandbox',
+            MCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.terminal_rounded, color: mc.violet),
+                      const SizedBox(width: Space.sm),
+                      Expanded(
+                        child: Text(
+                          '${(sandbox['mb'] as int) >= 1024 ? '${((sandbox['mb'] as int) / 1024).toStringAsFixed(1)} GB' : '${sandbox['mb']} MB'} workspace · up to ${sandbox['maxHours']} h',
+                          style: Txt.bodyStrong(p.ink),
+                        ),
+                      ),
+                      Amount(sandbox['perHour'] as int, size: 15),
+                      Text(' / h', style: Txt.mono(p.muted, size: 11)),
+                    ],
+                  ),
+                  const SizedBox(height: Space.sm),
+                  Text(
+                    'Upload files and run scripts on this device from a console of your own. Scripts run in a sandbox with no network access. '
+                    'The host can read files in the workspace, so use storage for anything private. Unused hours are refunded.',
+                    style: Txt.small(p.muted),
+                  ),
+                  const SizedBox(height: Space.md),
+                  Wrap(
+                    spacing: Space.sm,
+                    runSpacing: Space.sm,
+                    children: [
+                      if (!mine)
+                        FilledButton.icon(
+                          onPressed: () => _rentBox(context, ref, l, sandbox),
+                          icon: const Icon(Icons.play_circle_outline_rounded),
+                          label: const Text('Rent a sandbox'),
+                        ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          final r = m.startDemoBox();
+                          context.push('/market/box/${r['bid']}');
+                        },
+                        icon: const Icon(Icons.science_outlined),
+                        label: const Text('Try the free demo'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (compute != null)
           _section(
             context,
@@ -790,6 +849,54 @@ class _ResourceView extends ConsumerWidget {
         _section(context, 'Reviews', _Reviews(l.author)),
       ],
     );
+  }
+
+  Future<void> _rentBox(BuildContext context, WidgetRef ref, Listing l, Map<String, dynamic> sandbox) async {
+    final m = ref.read(marketProvider)!;
+    final maxH = sandbox['maxHours'] as int;
+    var hours = maxH < 2 ? 1 : 2;
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) {
+          final p = ctx.pal;
+          final total = hours * (sandbox['perHour'] as int);
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(Space.gutter, 0, Space.gutter, Space.lg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Rent a sandbox', style: Txt.title(p.ink)),
+                  const SizedBox(height: Space.md),
+                  Text('$hours hour${hours == 1 ? '' : 's'}', style: Txt.heading(p.ink)),
+                  Slider(value: hours.toDouble(), min: 1, max: maxH.toDouble(), divisions: math.max(1, maxH - 1), onChanged: (v) => set(() => hours = v.round())),
+                  Row(
+                    children: [
+                      Expanded(child: Text('Held in escrow, paid out hour by hour', style: Txt.small(p.muted))),
+                      Amount(total, size: 18),
+                    ],
+                  ),
+                  const SizedBox(height: Space.lg),
+                  FilledButton(
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: Text('Pay ${Coin.format(total)} into escrow'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    await attempt(context, () async {
+      final r = await m.rentBox(l, hours: hours);
+      if (context.mounted) context.push('/market/box/${r['bid']}');
+    }, done: 'Requested. The console opens once the host accepts.');
   }
 
   Future<void> _rent(BuildContext context, WidgetRef ref, Listing l, Map<String, dynamic> storage) async {
@@ -1088,46 +1195,147 @@ class _ExchangeView extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // plugin pack
 
-class _PackView extends ConsumerWidget {
-  const _PackView(this.l);
+class _PluginView extends ConsumerWidget {
+  const _PluginView(this.l);
   final Listing l;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final m = ref.watch(marketProvider)!;
-    final e = ref.watch(engineProvider);
-    final pack = (l.body['pack'] as Map?) ?? const {};
-    final installed = e.pluginInstalled(l.id);
+    ref.watch(pluginTickProvider);
+    final host = ref.watch(pluginHostProvider);
+    final manifest = manifestOfListing(l);
+    final have = host?.plugin(manifest.id);
+    final upToDate = have != null && have.manifest.version == manifest.version;
+    final source = l.body['source'] as String?;
+    final homepage = l.body['homepage'] as String?;
+    final size = l.body['size'] as int?;
+    if (l.body['manifest'] is! String) {
+      return const EmptyState(icon: Icons.extension_off_outlined, title: 'Old listing', body: 'This was a sticker or phrase pack. Packs were replaced by real plugins.');
+    }
     return ListView(
-      padding: const EdgeInsets.all(Space.gutter),
+      padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, Space.xxl),
       children: [
-        Text(l.title, style: Txt.title(p.ink)),
-        const SizedBox(height: Space.sm),
-        Text(l.about, style: Txt.body(p.inkSoft)),
-        const SizedBox(height: Space.lg),
-        MCard(
-          child: switch (l.body['plugin']) {
-            'stickers' => Text(((pack['emoji'] as List?) ?? const []).join('  '), style: const TextStyle(fontSize: 30)),
-            'phrases' => Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [for (final x in (pack['lines'] as List? ?? const [])) Padding(padding: const EdgeInsets.only(bottom: 6), child: Text('“$x”', style: Txt.body(p.ink)))],
+        Row(
+          children: [
+            PluginIcon(manifest, size: 64),
+            const SizedBox(width: Space.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(l.title, style: Txt.title(p.ink)),
+                  const SizedBox(height: 2),
+                  Text('v${manifest.version} · ${manifest.id}', style: Txt.mono(p.muted, size: 11)),
+                  const SizedBox(height: 6),
+                  l.price == 0 ? Text('Free', style: Txt.bodyStrong(p.accent)) : Amount(l.price, size: 15),
+                ],
+              ),
             ),
-            _ => Text('Accent colour: ${pack['accent']}', style: Txt.body(p.ink)),
-          },
+          ],
         ),
         const SizedBox(height: Space.lg),
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                icon: Icon(upToDate ? Icons.open_in_new_rounded : Icons.download_rounded, size: 18),
+                label: Text(
+                  upToDate
+                      ? 'Open'
+                      : have != null
+                      ? 'Update to v${manifest.version}'
+                      : (m.pluginPaid(l) ? 'Install' : 'Get for ${Coin.format(l.price)}'),
+                ),
+                onPressed: upToDate ? () => context.push('/plugins/${manifest.id}') : () => installListedPlugin(context, ref, l),
+              ),
+            ),
+          ],
+        ),
+        if (l.about.isNotEmpty) ...[
+          const SizedBox(height: Space.lg),
+          Text(l.about, style: Txt.body(p.inkSoft)),
+        ],
+        const SizedBox(height: Space.lg),
+        MCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(manifest.permissions.isEmpty ? 'NEEDS NO PERMISSIONS' : 'IT CAN', style: Txt.label(p.muted)),
+              const SizedBox(height: Space.sm),
+              for (final perm in manifest.permissions)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Row(
+                    children: [
+                      Icon(pluginPermissions[perm]!.$1, size: 18, color: p.inkSoft),
+                      const SizedBox(width: Space.md),
+                      Expanded(child: Text(pluginPermissions[perm]!.$2, style: Txt.body(p.ink))),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: Space.sm),
+              Text(
+                'Plugins run in a sandbox. You approve these again before it installs.',
+                style: Txt.small(p.muted),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: Space.md),
+        MCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('DETAILS', style: Txt.label(p.muted)),
+              const SizedBox(height: Space.sm),
+              _pluginFact(p, 'Manifest', Uri.parse(l.body['manifest'] as String).host),
+              if (size != null) _pluginFact(p, 'Size', '${(size / 1024).toStringAsFixed(1)} KB'),
+              _pluginFact(p, 'Checksum', '${(l.body['sha256'] as String).substring(0, 16)}…'),
+              _pluginFact(p, 'Listed', DateFormat.yMMMd().format(DateTime.fromMillisecondsSinceEpoch(l.ts))),
+              const SizedBox(height: Space.sm),
+              Wrap(
+                spacing: Space.sm,
+                children: [
+                  if (source != null)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.code_rounded, size: 16),
+                      label: const Text('Source'),
+                      onPressed: () => launchUrl(Uri.parse(source), mode: LaunchMode.externalApplication),
+                    ),
+                  if (homepage != null)
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.public_rounded, size: 16),
+                      label: const Text('Website'),
+                      onPressed: () => launchUrl(Uri.parse(homepage), mode: LaunchMode.externalApplication),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: Space.md),
+        Text('PUBLISHER', style: Txt.label(p.muted)),
+        const SizedBox(height: Space.sm),
         TraderChip(l.author),
-        const SizedBox(height: Space.xl),
-        FilledButton(
-          onPressed: installed
-              ? () {
-                  e.removePlugin(l.id);
-                  toast(context, 'Removed');
-                }
-              : () => attempt(context, () => m.getPack(l), done: 'Installed'),
-          child: Text(installed ? 'Remove' : (l.price == 0 ? 'Install' : 'Buy for ${Coin.format(l.price)}')),
+        const SizedBox(height: Space.md),
+        Text(
+          'The app installs only the exact script this listing was published with. If the publisher changes it, the listing has to be updated before anyone can install the new version.',
+          style: Txt.small(p.muted),
         ),
       ],
     );
   }
 }
+
+Widget _pluginFact(Palette p, String k, String v) => Padding(
+  padding: const EdgeInsets.symmetric(vertical: 3),
+  child: Row(
+    children: [
+      SizedBox(width: 90, child: Text(k, style: Txt.small(p.muted))),
+      Expanded(child: Text(v, style: Txt.mono(p.inkSoft, size: 12))),
+    ],
+  ),
+);

@@ -12,10 +12,16 @@ class Folded {
   final deleted = <String>{};
   final likes = <String, Set<String>>{};
   final reactions = <String, Map<String, String>>{};
+
+  /// target -> author -> up to [maxReactions] emoji, oldest first.
+  final reactionSets = <String, Map<String, List<String>>>{};
   final votes = <String, Map<String, int>>{};
   final views = <String, Set<String>>{};
   final closedPolls = <String>{};
 }
+
+/// How many different reactions one person can leave on a message.
+const maxReactions = 3;
 
 Folded fold(
   Iterable<Item> mutations,
@@ -57,11 +63,23 @@ Folded fold(
         m.body['on'] == false ? s.remove(m.author) : s.add(m.author);
       case K.react:
         final r = f.reactions.putIfAbsent(t, () => <String, String>{});
-        final emoji = m.body['emoji'] as String?;
-        if (emoji == null || emoji.isEmpty || m.body['on'] == false) {
+        final sets = f.reactionSets.putIfAbsent(t, () => <String, List<String>>{});
+        final mine = sets.putIfAbsent(m.author, () => <String>[]);
+        final emoji = m.body['emoji'] is String ? m.body['emoji'] as String : '';
+        if (emoji.isEmpty) {
+          mine.clear();
+        } else if (m.body['on'] == false) {
+          mine.remove(emoji);
+        } else if (!mine.contains(emoji)) {
+          // A fourth reaction replaces the oldest one.
+          mine.add(emoji);
+          if (mine.length > maxReactions) mine.removeAt(0);
+        }
+        if (mine.isEmpty) {
+          sets.remove(m.author);
           r.remove(m.author);
         } else {
-          r[m.author] = emoji;
+          r[m.author] = mine.last;
         }
       case K.vote:
         final v = f.votes.putIfAbsent(t, () => <String, int>{});
@@ -265,7 +283,10 @@ class MessageView {
   final Item item;
   final String text;
   final List<MediaRef> media;
-  final Map<String, String> reactions;
+  /// author -> the emoji they reacted with (up to [maxReactions]).
+  final Map<String, List<String>> reactions;
+
+  List<String> reactionsBy(String author) => reactions[author] ?? const [];
   final bool edited;
   final bool mine;
   final MessageView? replyTo;
@@ -293,8 +314,10 @@ class MessageView {
 
   Map<String, int> get reactionCounts {
     final out = <String, int>{};
-    for (final e in reactions.values) {
-      out[e] = (out[e] ?? 0) + 1;
+    for (final list in reactions.values) {
+      for (final e in list) {
+        out[e] = (out[e] ?? 0) + 1;
+      }
     }
     return out;
   }

@@ -1560,6 +1560,7 @@ class CoinLedger {
             id: 'coin:${tx.hash}',
             kind: 'coin',
             actor: tx.from,
+            ref: tx.hash,
             ts: tx.ts,
             text: text,
           ),

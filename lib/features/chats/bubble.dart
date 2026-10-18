@@ -81,21 +81,52 @@ class Bubble extends ConsumerWidget {
         ],
         if (m.edited)
           Text(
-            'edited · ',
-            style: Txt.mono(mediaOnly ? Colors.white : sub, size: 10),
+            'edited ',
+            style: Txt.small(mediaOnly ? Colors.white : sub).copyWith(fontSize: 11, fontStyle: FontStyle.italic),
           ),
         Text(
           clock(m.ts),
           style: Txt.mono(mediaOnly ? Colors.white : sub, size: 10),
         ),
-        if (mine) ...[
+        if (mine && m.delivery == Delivery.failed) ...[
           const SizedBox(width: 4),
-          _Ticks(
-            d: m.delivery,
-            color: mediaOnly ? Colors.white : sub,
-            read: p.accent,
-          ),
+          Icon(Icons.error_outline_rounded, size: 13, color: p.danger),
         ],
+      ],
+    );
+
+    final reactions = m.reactionCounts;
+    final myReactions = m.reactionsBy(e.me.id);
+    Widget chips() => Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final r in reactions.entries)
+          GestureDetector(
+            onTap: () => e.react(scope, m.id, r.key, on: !myReactions.contains(r.key)),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color: myReactions.contains(r.key)
+                    ? (mine ? Colors.white.withValues(alpha: .22) : p.accent.withValues(alpha: .18))
+                    : (mine ? Colors.white.withValues(alpha: .1) : p.raised),
+                borderRadius: BorderRadius.circular(Radii.pill),
+                border: myReactions.contains(r.key)
+                    ? Border.all(color: mine ? Colors.white.withValues(alpha: .5) : p.accent.withValues(alpha: .6))
+                    : null,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(r.key, style: const TextStyle(fontSize: 14, height: 1.1)),
+                  if (r.value > 1) ...[
+                    const SizedBox(width: 4),
+                    Text('${r.value}', style: Txt.small(fg).copyWith(fontSize: 12, fontWeight: FontWeight.w600)),
+                  ],
+                ],
+              ),
+            ),
+          ),
       ],
     );
 
@@ -231,13 +262,28 @@ class Bubble extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
             child: InviteCard(text: m.text),
           ),
-        if (!mediaOnly)
+        if (!mediaOnly && reactions.isEmpty)
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 2, 10, 7),
             child: Align(
               alignment: Alignment.centerRight,
               widthFactor: 1,
               child: meta,
+            ),
+          ),
+        if (reactions.isNotEmpty)
+          Padding(
+            padding: EdgeInsets.fromLTRB(10, mediaOnly ? 8 : 4, 10, 7),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Flexible(child: chips()),
+                if (!mediaOnly) ...[
+                  const SizedBox(width: 10),
+                  meta,
+                ],
+              ],
             ),
           ),
       ],
@@ -294,8 +340,6 @@ class Bubble extends ConsumerWidget {
           : content,
     );
 
-    final reactions = m.reactionCounts;
-
     return _SwipeToReply(
       onReply: onReply,
       child: AnimatedContainer(
@@ -305,7 +349,7 @@ class Bubble extends ConsumerWidget {
           Space.md,
           firstInGroup ? 6 : 1.5,
           Space.md,
-          reactions.isEmpty ? 1.5 : 0,
+          1.5,
         ),
         child: Row(
           mainAxisAlignment: mine
@@ -317,7 +361,7 @@ class Bubble extends ConsumerWidget {
               Padding(
                 padding: EdgeInsets.only(
                   right: 8,
-                  bottom: reactions.isEmpty ? 0 : 18,
+                  bottom: 0,
                 ),
                 child: lastInGroup
                     ? Avatar(id: m.author, size: 28, presence: false)
@@ -341,55 +385,6 @@ class Bubble extends ConsumerWidget {
                         onOpen: () => showMessageDelivery(context, e, m),
                       ),
                     ),
-                    if (reactions.isNotEmpty)
-                      Transform.translate(
-                        offset: const Offset(0, -6),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          child: Wrap(
-                            spacing: 4,
-                            children: [
-                              for (final r in reactions.entries)
-                                GestureDetector(
-                                  onTap: () {
-                                    final mineR = m.reactions[e.me.id];
-                                    e.react(
-                                      scope,
-                                      m.id,
-                                      mineR == r.key ? null : r.key,
-                                    );
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 7,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: m.reactions[e.me.id] == r.key
-                                          ? p.accentSoft
-                                          : p.surface,
-                                      borderRadius: BorderRadius.circular(
-                                        Radii.pill,
-                                      ),
-                                      border: Border.all(
-                                        color: m.reactions[e.me.id] == r.key
-                                            ? p.accent
-                                            : p.line,
-                                      ),
-                                    ),
-                                    child: Text(
-                                      r.value > 1
-                                          ? '${r.key} ${r.value}'
-                                          : r.key,
-                                      style: Txt.small(p.ink)
-                                          .copyWith(fontSize: 13),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),
@@ -418,38 +413,6 @@ String previewOf(MessageView m) {
   return 'Message';
 }
 
-class _Ticks extends StatelessWidget {
-  const _Ticks({required this.d, required this.color, required this.read});
-  final Delivery d;
-  final Color color;
-  final Color read;
-
-  @override
-  Widget build(BuildContext context) {
-    final icon = switch (d) {
-      Delivery.queued => Icon(Icons.schedule_rounded, size: 12, color: color),
-      Delivery.sending => Icon(Icons.schedule_rounded, size: 12, color: color),
-      Delivery.failed => Icon(
-        Icons.error_outline_rounded,
-        size: 13,
-        color: color,
-      ),
-      Delivery.sent => Icon(Icons.check_rounded, size: 13, color: color),
-      Delivery.delivered => Icon(
-        Icons.done_all_rounded,
-        size: 13,
-        color: color,
-      ),
-      Delivery.read => Icon(Icons.done_all_rounded, size: 13, color: read),
-      Delivery.cancelled => Icon(Icons.block_rounded, size: 13, color: color),
-      Delivery.saved => Icon(Icons.save_outlined, size: 13, color: color),
-    };
-    return Tooltip(
-      message: d.label,
-      child: Semantics(label: d.label, child: icon),
-    );
-  }
-}
 
 class _SwipeToReply extends StatefulWidget {
   const _SwipeToReply({required this.child, required this.onReply});

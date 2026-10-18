@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../plugins/plugin_providers.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -222,7 +223,7 @@ class PostCard extends ConsumerWidget {
                                 ],
                                 if (post.ai) ...[
                                   const SizedBox(width: 6),
-                                  _Flag('AI', fg: p.danger, bg: p.dangerSoft),
+                                  _Flag('AI', fg: const Color(0xFF2563EB), bg: const Color(0xFF2563EB).withValues(alpha: .12)),
                                 ],
                                 if (post.nsfw) ...[
                                   const SizedBox(width: 6),
@@ -289,7 +290,7 @@ class PostCard extends ConsumerWidget {
                                 post.text.isNotEmpty ||
                                 post.repost != null)
                               const SizedBox(height: Space.md),
-                            MediaGrid(media: post.media, item: post.item),
+                            MediaGrid(media: post.media, item: post.item, square: ref.watch(pluginLayoutProvider).feedImages != 'original'),
                           ],
                           for (final m in post.media.where(
                             (m) => !m.isImage && !m.isVideo,

@@ -45,6 +45,7 @@ dependencies:
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   pdfrx: ^2.6.5
+  flutter_markdown_plus: ^1.0.12
 
 dev_dependencies:
   flutter_test:

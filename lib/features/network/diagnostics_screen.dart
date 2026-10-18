@@ -14,11 +14,17 @@ import '../../state/providers.dart';
 import '../../widgets/avatar.dart';
 import '../../widgets/tech.dart';
 import '../../widgets/ui.dart';
+import 'privacy_screen.dart';
 
 /// Everything the iroh node knows about this network, in plain words first
 /// and raw numbers underneath.
 class DiagnosticsScreen extends ConsumerWidget {
-  const DiagnosticsScreen({super.key});
+  const DiagnosticsScreen({super.key, this.tab});
+
+  /// overview | connections | node | privacy
+  final String? tab;
+
+  static const _tabs = ['overview', 'connections', 'node', 'privacy'];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -28,80 +34,117 @@ class DiagnosticsScreen extends ConsumerWidget {
     final status = ref.watch(netStatusProvider).value;
     final d = async.value;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Network diagnostics'),
-        actions: [
-          IconBtn(Icons.refresh_rounded, tooltip: 'Re-check network', onTap: () {
-            e?.networkChanged();
-            ref.invalidate(diagnosticsProvider);
-            toast(context, 'Asked iroh to re-probe the network');
-          }),
-          IconBtn(Icons.ios_share_rounded, tooltip: 'Share report', onTap: () async {
-            if (e == null) return;
-            final report = await e.diagnosticsReport();
-            await SharePlus.instance.share(ShareParams(text: report, subject: 'Mentos network report'));
-          }),
-          const SizedBox(width: 8),
-        ],
-      ),
-      body: e == null
-          ? const Loading()
-          : !e.hasDiagnostics
-              ? const EmptyState(
-                  icon: Icons.portable_wifi_off_rounded,
-                  title: 'No network library',
-                  body: 'This build runs without the iroh node, so there is nothing to measure.',
-                )
-              : d == null
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(Space.xl),
-                        child: Text(
-                          _measuringText(loading: async.isLoading, running: status?.running == true),
-                          style: Txt.small(p.muted),
-                          textAlign: TextAlign.center,
-                        ),
+    Widget waiting() => e == null
+        ? const Loading()
+        : !e.hasDiagnostics
+            ? const EmptyState(
+                icon: Icons.portable_wifi_off_rounded,
+                title: 'No network library',
+                body: 'This build runs without the iroh node, so there is nothing to measure.',
+              )
+            : Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(Space.xl),
+                  child: Text(
+                    _measuringText(loading: async.isLoading, running: status?.running == true),
+                    style: Txt.small(p.muted),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              );
+
+    return DefaultTabController(
+      length: _tabs.length,
+      initialIndex: _tabs.indexOf(tab ?? 'overview').clamp(0, _tabs.length - 1),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Network diagnostics'),
+          actions: [
+            IconBtn(Icons.refresh_rounded, tooltip: 'Re-check network', onTap: () {
+              e?.networkChanged();
+              ref.invalidate(diagnosticsProvider);
+              toast(context, 'Asked iroh to re-probe the network');
+            }),
+            IconBtn(Icons.ios_share_rounded, tooltip: 'Share report', onTap: () async {
+              if (e == null) return;
+              final report = await e.diagnosticsReport();
+              await SharePlus.instance.share(ShareParams(text: report, subject: 'Mentos network report'));
+            }),
+            const SizedBox(width: 8),
+          ],
+          bottom: const TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            tabs: [Tab(text: 'Overview'), Tab(text: 'Connections'), Tab(text: 'This node'), Tab(text: 'Privacy')],
+          ),
+        ),
+        body: TabBarView(
+          children: [
+            d == null
+                ? waiting()
+                : ListView(
+                    padding: const EdgeInsets.only(bottom: Space.xxl),
+                    children: [
+                      _Summary(d: d),
+                      SectionLabel('Reachability'),
+                      _ReachGrid(d: d),
+                      SectionLabel('Relays', trailing: Text('latency', style: Txt.mono(p.faint, size: 10))),
+                      _RelayBars(d: d),
+                    ],
+                  ),
+            d == null
+                ? waiting()
+                : d.connections.isEmpty
+                    ? const EmptyState(icon: Icons.link_off_rounded, title: 'No open connections', body: 'QUIC connections appear here while peers are linked.')
+                    : ListView(
+                        padding: const EdgeInsets.only(top: Space.sm, bottom: Space.xxl),
+                        children: [for (final c in d.connections) _ConnTile(c: c)],
                       ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.only(bottom: Space.xxl),
-                      children: [
-                        _Summary(d: d),
-                        SectionLabel('Reachability'),
-                        _ReachGrid(d: d),
-                        SectionLabel('Relays', trailing: Text('latency', style: Txt.mono(p.faint, size: 10))),
-                        _RelayBars(d: d),
-                        SectionLabel('Live connections', trailing: Text('${d.connections.length}', style: Txt.mono(p.faint, size: 11))),
-                        if (d.connections.isEmpty)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
-                            child: Text('No open QUIC connections right now.', style: Txt.small(p.muted)),
-                          )
-                        else
-                          for (final c in d.connections) _ConnTile(c: c),
-                        SectionLabel('Local'),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
-                          child: TechRows([
-                            ('node id', d.nodeId, copy: true),
-                            ('privacy', _privacyLabel(d.privacy), copy: false),
-                            if (d.proxy != null) ('proxy', d.proxy!, copy: true),
-                            ('sockets', d.bound.isEmpty ? 'none bound (no IP transport)' : d.bound.join('\n'), copy: false),
-                            ('advertised', status == null || status.directAddrs.isEmpty ? 'no IP addresses' : status.directAddrs.join('\n'), copy: false),
-                            ('topics', '${d.topics} gossip topics', copy: false),
-                          ]),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(Space.gutter, Space.md, Space.gutter, 0),
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.shield_outlined, size: 18),
-                            label: const Text('Privacy and transports'),
-                            onPressed: () => context.push('/privacy'),
-                          ),
-                        ),
-                      ],
-                    ),
+            ListView(
+              padding: const EdgeInsets.only(bottom: Space.xxl),
+              children: [
+                SectionLabel('Identity'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                  child: TechRows([
+                    ('node id', status?.nodeId ?? e?.me.id ?? '—', copy: true),
+                    ('engine', status?.engine ?? 'offline', copy: false),
+                    ('encryption', 'QUIC · TLS 1.3 · Ed25519', copy: false),
+                  ]),
+                ),
+                SectionLabel('Addresses'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                  child: TechRows([
+                    ('home relay', status?.relayUrl ?? 'none yet', copy: status?.relayUrl != null),
+                    ('relays', (status?.relays ?? const []).isEmpty ? '—' : status!.relays.join('\n'), copy: false),
+                    ('advertised', status == null || status.directAddrs.isEmpty ? 'no IP addresses' : status.directAddrs.join('\n'), copy: false),
+                    if (d != null) ('sockets', d.bound.isEmpty ? 'none bound (no IP transport)' : d.bound.join('\n'), copy: false),
+                  ]),
+                ),
+                SectionLabel('Transport'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+                  child: TechRows([
+                    if (d != null) ('privacy', _privacyLabel(d.privacy), copy: false),
+                    if (d?.proxy != null) ('proxy', d!.proxy!, copy: true),
+                    ('topics', '${d?.topics ?? status?.topics ?? 0} gossip topics, one per space and person you follow', copy: false),
+                  ]),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(Space.gutter, Space.lg, Space.gutter, 0),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.travel_explore_rounded, size: 18),
+                    label: const Text('Open the network atlas'),
+                    onPressed: () => context.push('/atlas'),
+                  ),
+                ),
+              ],
+            ),
+            const PrivacyPanel(),
+          ],
+        ),
+      ),
     );
   }
 }

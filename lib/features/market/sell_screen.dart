@@ -1,3 +1,8 @@
+import '../plugins/plugins_screen.dart';
+import '../../plugins/plugins.dart';
+import '../../plugins/plugin_providers.dart';
+import 'package:crypto/crypto.dart' as c;
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -67,9 +72,19 @@ class _SellScreenState extends ConsumerState<SellScreen> {
   int _adDays = 7;
   bool _offerStorage = true;
   bool _offerCompute = true;
+  bool _offerBox = false;
+  final _perHour = TextEditingController(text: '0.50');
+  int _boxMb = 256;
+  int _boxHours = 24;
+  int _boxSlots = 2;
   int _gb = 5;
   int _maxMb = 64;
-  String _plugin = 'stickers';
+  final _manifestUrl = TextEditingController();
+  final _sourceUrl = TextEditingController();
+  final _homepage = TextEditingController();
+  ({PluginManifest manifest, String sha, int size, String url})? _fetched;
+  String? _fetchError;
+  bool _checking = false;
   bool _busy = false;
   Listing? _editing;
 
@@ -136,6 +151,14 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         final s = b['storage'] as Map?, c = b['compute'] as Map?;
         _offerStorage = s != null;
         _offerCompute = c != null;
+        final sb = b['sandbox'] as Map?;
+        _offerBox = sb != null;
+        if (sb != null) {
+          _perHour.text = Coin.format(sb['perHour'] as int);
+          _boxMb = sb['mb'] as int;
+          _boxHours = sb['maxHours'] as int;
+          _boxSlots = (sb['slots'] as int?) ?? 2;
+        }
         if (s != null) {
           _gb = s['gb'] as int;
           _price.text = Coin.format(s['perGbDay'] as int);
@@ -159,19 +182,18 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         _extra.text = '${b['terms'] ?? ''}';
       case Kinds.plugin:
         _price.text = Coin.format(l.price);
-        _plugin = '${b['plugin']}';
-        final pack = (b['pack'] as Map?) ?? const {};
-        _extra.text = switch (_plugin) {
-          'stickers' => ((pack['emoji'] as List?) ?? const []).join(' '),
-          'phrases' => ((pack['lines'] as List?) ?? const []).join('\n'),
-          _ => '${pack['accent'] ?? 'blue'}',
-        };
+        if (b['manifest'] is String) {
+          _manifestUrl.text = b['manifest'] as String;
+          _sourceUrl.text = '${b['source'] ?? ''}';
+          _homepage.text = '${b['homepage'] ?? ''}';
+          _fetched = (manifest: manifestOfListing(l), sha: '${b['sha256']}', size: (b['size'] as int?) ?? 0, url: b['manifest'] as String);
+        }
     }
   }
 
   @override
   void dispose() {
-    for (final c in [_title, _about, _price, _tags, _location, _stock, _extra, _rate, _min, _max, _payout, _perView, _perClick, _dailyCap, _perUnit]) {
+    for (final c in [_perHour, _manifestUrl, _sourceUrl, _homepage, _title, _about, _price, _tags, _location, _stock, _extra, _rate, _min, _max, _payout, _perView, _perClick, _dailyCap, _perUnit]) {
       c.dispose();
     }
     super.dispose();
@@ -183,7 +205,7 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     Kinds.ad => _editing == null ? 'Promote' : 'Edit campaign',
     Kinds.resource => 'Offer this phone',
     Kinds.exchange => _editing == null ? 'New exchange offer' : 'Edit offer',
-    _ => 'Publish a pack',
+    _ => _editing == null ? 'List a plugin' : 'Edit plugin listing',
   };
 
   @override
@@ -669,6 +691,27 @@ class _SellScreenState extends ConsumerState<SellScreen> {
         Slider(value: _maxMb.toDouble(), min: 1, max: 512, divisions: 63, onChanged: (v) => setState(() => _maxMb = v.round())),
         Text('Jobs run in an isolated worker from a fixed list. Nothing a renter sends runs as code.', style: Txt.small(p.muted)),
       ],
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Rent a sandbox'),
+        subtitle: const Text('Renters get a private workspace with files and a script runner, paid by the hour'),
+        value: _offerBox,
+        onChanged: (v) => setState(() => _offerBox = v),
+      ),
+      if (_offerBox) ...[
+        _money(_perHour, 'Price per hour (MNT)'),
+        Text('Workspace size: ${_boxMb >= 1024 ? '${(_boxMb / 1024).toStringAsFixed(1)} GB' : '$_boxMb MB'}', style: Txt.bodyStrong(p.ink)),
+        Slider(value: _boxMb.toDouble(), min: 16, max: 4096, divisions: 255, onChanged: (v) => setState(() => _boxMb = (v / 16).round() * 16)),
+        Text('Longest session: $_boxHours h', style: Txt.bodyStrong(p.ink)),
+        Slider(value: _boxHours.toDouble(), min: 1, max: 168, divisions: 167, onChanged: (v) => setState(() => _boxHours = v.round())),
+        Text('Renters at once: $_boxSlots', style: Txt.bodyStrong(p.ink)),
+        Slider(value: _boxSlots.toDouble(), min: 1, max: 8, divisions: 7, onChanged: (v) => setState(() => _boxSlots = v.round())),
+        Text(
+          'Scripts are MentosScript, the same sandbox plugins use: no network, no access outside the workspace, '
+          'and a step limit on every run. You can see what runs and end a session any time; unused hours are refunded.',
+          style: Txt.small(p.muted),
+        ),
+      ],
     ];
   }
 
@@ -704,25 +747,140 @@ class _SellScreenState extends ConsumerState<SellScreen> {
     ];
   }
 
-  List<Widget> _pluginForm(Palette p) => [
-    _field(_title, 'Name', max: 100),
-    _field(_about, 'About', lines: 2, max: 1000),
-    Wrap(spacing: 8, children: [
-      for (final k in const {'stickers': 'Stickers', 'phrases': 'Phrases', 'theme': 'Accent'}.entries)
-        ChoiceChip(label: Text(k.value), selected: _plugin == k.key, onSelected: (_) => setState(() => _plugin = k.key)),
-    ]),
-    const SizedBox(height: Space.md),
-    _field(
-      _extra,
-      switch (_plugin) {
-        'stickers' => 'Emoji, separated by spaces',
-        'phrases' => 'One phrase per line',
-        _ => 'emerald, blue, amber or ink',
-      },
-      lines: _plugin == 'phrases' ? 4 : 1,
-    ),
-    _money(_price, 'Price (MNT, 0 for free)'),
-  ];
+  Future<void> _check() async {
+    final host = ref.read(pluginHostProvider);
+    final u = Uri.tryParse(_manifestUrl.text.trim());
+    if (host == null || u == null || u.scheme != 'https' || u.host.isEmpty) {
+      setState(() => _fetchError = 'Paste the https:// address of your plugin.json');
+      return;
+    }
+    setState(() {
+      _checking = true;
+      _fetchError = null;
+    });
+    try {
+      final (m, src) = await host.fetchPackage(u);
+      final sha = c.sha256.convert(utf8.encode(src)).toString();
+      setState(() {
+        _fetched = (manifest: m, sha: sha, size: utf8.encode(src).length, url: u.toString());
+        if (_title.text.trim().isEmpty || _editing == null) _title.text = m.name;
+        if (_about.text.trim().isEmpty) _about.text = m.description;
+        if (_homepage.text.trim().isEmpty && m.homepage != null) _homepage.text = m.homepage!;
+        if (_sourceUrl.text.trim().isEmpty) _sourceUrl.text = u.resolve(m.main).toString();
+      });
+    } catch (e) {
+      setState(() {
+        _fetched = null;
+        _fetchError = '$e';
+      });
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  List<Widget> _pluginForm(Palette p) {
+    final f = _fetched;
+    final stale = f != null && f.url != _manifestUrl.text.trim();
+    return [
+      Text(
+        'Host your plugin anywhere over https (a GitHub repo works: use its raw plugin.json link). '
+        'Mentos fetches it, checks it runs, and pins the script\'s checksum to your listing, so buyers get exactly what you checked.',
+        style: Txt.small(p.muted),
+      ),
+      const SizedBox(height: Space.md),
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: _manifestUrl,
+              keyboardType: TextInputType.url,
+              style: Txt.mono(p.ink, size: 13),
+              decoration: InputDecoration(
+                labelText: 'plugin.json link',
+                hintText: 'https://raw.githubusercontent.com/you/repo/main/plugin.json',
+                errorText: _fetchError,
+                errorMaxLines: 3,
+              ),
+              onChanged: (_) => setState(() {}),
+              onSubmitted: (_) => _check(),
+            ),
+          ),
+          const SizedBox(width: Space.sm),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: FilledButton.tonal(
+              onPressed: _checking ? null : _check,
+              child: _checking ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Check'),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: Space.md),
+      if (f != null)
+        Container(
+          padding: const EdgeInsets.all(Space.md),
+          decoration: BoxDecoration(
+            color: p.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: stale ? p.danger : p.accent.withValues(alpha: .5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  PluginIcon(f.manifest, size: 48),
+                  const SizedBox(width: Space.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(f.manifest.name, style: Txt.bodyStrong(p.ink)),
+                        Text('${f.manifest.id} · v${f.manifest.version} · ${(f.size / 1024).toStringAsFixed(1)} KB', style: Txt.mono(p.muted, size: 11)),
+                      ],
+                    ),
+                  ),
+                  Icon(stale ? Icons.error_outline_rounded : Icons.verified_rounded, color: stale ? p.danger : p.accent),
+                ],
+              ),
+              const SizedBox(height: Space.sm),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final perm in f.manifest.permissions)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(color: p.raised, borderRadius: BorderRadius.circular(Radii.pill)),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(pluginPermissions[perm]!.$1, size: 13, color: p.inkSoft),
+                          const SizedBox(width: 4),
+                          Text(perm, style: Txt.mono(p.inkSoft, size: 10.5)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: Space.sm),
+              Text(
+                stale ? 'The link changed. Check it again before publishing.' : 'Checksum ${f.sha.substring(0, 16)}… will be pinned.',
+                style: Txt.small(stale ? p.danger : p.muted),
+              ),
+            ],
+          ),
+        ),
+      const SizedBox(height: Space.lg),
+      _field(_title, 'Name', max: 100),
+      _field(_about, 'What it does', lines: 3, max: 1000),
+      _field(_tags, 'Tags (comma separated)', hint: 'chat, theme, productivity'),
+      _field(_sourceUrl, 'Source code link (optional)', keyboard: TextInputType.url),
+      _field(_homepage, 'Website (optional)', keyboard: TextInputType.url),
+      _money(_price, 'Price in Mentos (0 for free)', helper: 'Buyers pay you once, then install'),
+    ];
+  }
 
   // ---------------------------------------------------------------------------
 
@@ -809,11 +967,12 @@ class _SellScreenState extends ConsumerState<SellScreen> {
           'status': _editing?.status ?? 'active',
         };
       case Kinds.resource:
-        if (!_offerStorage && !_offerCompute) throw ArgumentError('Offer storage, compute or both');
+        if (!_offerStorage && !_offerCompute && !_offerBox) throw ArgumentError('Offer storage, compute or a sandbox');
         return {
           ...common,
           if (_offerStorage) 'storage': {'gb': _gb, 'perGbDay': money(_price, 'storage price')},
           if (_offerCompute) 'compute': {'jobs': _jobs.toList(), 'perUnit': money(_perUnit, 'compute price'), 'maxMb': _maxMb},
+          if (_offerBox) 'sandbox': {'perHour': money(_perHour, 'hourly price'), 'mb': _boxMb, 'maxHours': _boxHours, 'slots': _boxSlots, 'steps': 2000000},
           'bench': m.lastBench ?? const {},
           'status': 'active',
         };
@@ -833,18 +992,29 @@ class _SellScreenState extends ConsumerState<SellScreen> {
           'status': 'active',
         };
       default:
-        final raw = _extra.text.trim();
-        final pack = switch (_plugin) {
-          'stickers' => {'emoji': raw.split(RegExp(r'\s+')).where((s) => s.isNotEmpty).take(24).toList()},
-          'phrases' => {'lines': raw.split('\n').map((s) => s.trim()).where((s) => s.isNotEmpty).take(24).toList()},
-          _ => {'accent': raw.isEmpty ? 'blue' : raw},
-        };
-        validatePack({'plugin': _plugin, 'body': pack});
+        final f = _fetched;
+        if (f == null) throw ArgumentError('Check your plugin link first');
+        if (f.url != _manifestUrl.text.trim()) throw ArgumentError('The link changed. Tap Check again.');
+        String? link(TextEditingController c, String what) {
+          final t = c.text.trim();
+          if (t.isEmpty) return null;
+          final u = Uri.tryParse(t);
+          if (u == null || u.scheme != 'https' || u.host.isEmpty) throw ArgumentError('$what must be an https:// link');
+          return t;
+        }
+
         return {
           ...common,
           'price': _price.text.trim().isEmpty || _price.text.trim() == '0' ? 0 : money(_price, 'price'),
-          'plugin': _plugin,
-          'pack': pack,
+          'manifest': f.url,
+          'pluginId': f.manifest.id,
+          'version': f.manifest.version,
+          'sha256': f.sha,
+          'size': f.size,
+          'permissions': f.manifest.permissions,
+          'icon': f.manifest.icon,
+          'source': ?link(_sourceUrl, 'Source'),
+          'homepage': ?link(_homepage, 'Website'),
           'status': 'active',
         };
     }

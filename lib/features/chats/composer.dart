@@ -13,6 +13,7 @@ import '../../core/theme/tokens.dart';
 import '../../data/models.dart';
 import '../../net/link_preview.dart';
 import '../../net/views.dart';
+import '../../plugins/plugin_providers.dart';
 import '../../state/live_share.dart';
 import '../../state/providers.dart';
 import '../../widgets/ui.dart';
@@ -96,9 +97,22 @@ class ComposerState extends ConsumerState<Composer> {
   }
 
   Future<void> _send() async {
-    final text = _c.text.trim();
+    var text = _c.text.trim();
     if (text.isEmpty) return;
     final e = ref.read(engineProvider);
+    final plugins = ref.read(pluginHostProvider);
+    if (plugins != null && widget.editing == null && widget.publishPost == null) {
+      final out = plugins.runCommand(text, widget.scope);
+      if (out != null) {
+        if (out.trim().isEmpty) {
+          _c.clear();
+          return;
+        }
+        text = out.trim();
+      }
+      text = plugins.transformOutgoing(text, widget.scope).trim();
+      if (text.isEmpty) return;
+    }
     if (widget.editing != null) {
       if (text != widget.editing!.text)
         await e.edit(widget.scope, widget.editing!.id, text);
@@ -458,6 +472,14 @@ class ComposerState extends ConsumerState<Composer> {
     final p = context.pal;
     final e = ref.read(engineProvider);
     final hasText = _c.text.trim().isNotEmpty;
+    ref.watch(pluginTickProvider);
+    final typed = _c.text;
+    final commands = widget.publishPost == null && typed.startsWith('/') && !typed.contains(' ')
+        ? (ref.read(pluginHostProvider)?.commands ?? const [])
+            .where((c) => c.name.startsWith(typed.substring(1).toLowerCase()))
+            .take(5)
+            .toList()
+        : const [];
 
     return Container(
       decoration: BoxDecoration(
@@ -514,6 +536,28 @@ class ComposerState extends ConsumerState<Composer> {
                       },
                     ),
                   ],
+                ),
+              ),
+            for (final cmd in commands)
+              InkWell(
+                onTap: () {
+                  _c.text = '/${cmd.name} ';
+                  _c.selection = TextSelection.collapsed(offset: _c.text.length);
+                  focus.requestFocus();
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(Space.gutter, 9, Space.gutter, 9),
+                  child: Row(
+                    children: [
+                      Icon(Icons.extension_outlined, size: 16, color: p.accent),
+                      const SizedBox(width: 10),
+                      Text('/${cmd.name}', style: Txt.mono(p.ink, size: 13, w: FontWeight.w600)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(cmd.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.small(p.muted)),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             Padding(

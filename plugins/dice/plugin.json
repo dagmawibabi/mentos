@@ -1,0 +1,10 @@
+{
+  "id": "dice",
+  "name": "Dice",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "Roll dice, flip coins and let chance pick for you, right in any chat.",
+  "icon": "casino",
+  "permissions": ["commands"],
+  "main": "main.js"
+}

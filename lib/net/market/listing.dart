@@ -349,8 +349,16 @@ class Listing {
   }
 
   String? _resource() {
-    final storage = body['storage'], compute = body['compute'], bench = body['bench'];
-    if (storage == null && compute == null) return 'offer storage or compute';
+    final storage = body['storage'], compute = body['compute'], bench = body['bench'], sandbox = body['sandbox'];
+    if (storage == null && compute == null && sandbox == null) return 'offer storage, compute or a sandbox';
+    if (sandbox != null) {
+      if (sandbox is! Map) return 'sandbox';
+      if (!_money(sandbox['perHour'], min: 1)) return 'sandbox price';
+      final mb = sandbox['mb'], hours = sandbox['maxHours'], slots = sandbox['slots'];
+      if (mb is! int || mb < 1 || mb > 102400) return 'sandbox size';
+      if (hours is! int || hours < 1 || hours > 720) return 'sandbox hours';
+      if (slots != null && (slots is! int || slots < 1 || slots > 20)) return 'sandbox slots';
+    }
     if (storage != null) {
       if (storage is! Map) return 'storage';
       final gb = storage['gb'];
@@ -386,13 +394,24 @@ class Listing {
     return null;
   }
 
+  /// A script plugin listed for others: where its manifest lives and the
+  /// checksum of the script it was reviewed with.
   String? _plugin() {
     if (!_money(body['price'], min: 0)) return 'price';
-    try {
-      validatePack({'plugin': body['plugin'], 'body': body['pack']});
-    } catch (_) {
-      return 'pack';
-    }
+    final manifest = body['manifest'];
+    if (manifest is! String || !_url(manifest)) return 'manifest';
+    if (Uri.parse(manifest).scheme != 'https') return 'manifest';
+    final pid = body['pluginId'];
+    if (pid is! String || !RegExp(r'^[a-z0-9][a-z0-9-]{1,39}$').hasMatch(pid)) return 'plugin id';
+    if (!_text(body['version'], 1, 20)) return 'version';
+    final sha = body['sha256'];
+    if (sha is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(sha)) return 'checksum';
+    if (!_list(body['permissions'], 16, (x) => _text(x, 1, 24))) return 'permissions';
+    if (body['icon'] != null && !_text(body['icon'], 1, 40)) return 'icon';
+    if (body['homepage'] != null && !_url(body['homepage'])) return 'homepage';
+    if (body['source'] != null && !_url(body['source'])) return 'source';
+    final size = body['size'];
+    if (size != null && (size is! int || size < 0)) return 'size';
     return null;
   }
 }

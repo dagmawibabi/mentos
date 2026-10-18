@@ -28,7 +28,10 @@ class _NewGroupScreenState extends ConsumerState<NewGroupScreen> {
   }
 
   Future<void> _create() async {
-    if (_picked.isEmpty) return;
+    if (_name.text.trim().isEmpty) {
+      toast(context, 'Give the group a name');
+      return;
+    }
     setState(() => _busy = true);
     final g = await ref.read(engineProvider).createGroup(_name.text, _picked.toList());
     if (mounted) context.pushReplacement('/g/${g.id}');
@@ -55,11 +58,16 @@ class _NewGroupScreenState extends ConsumerState<NewGroupScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(Space.gutter, Space.sm, Space.gutter, 0),
             child: Text(
-              'People you pick get an invite first. They can accept or decline before they join the sealed chat.',
+              "Invite people now or later from the group's info. Anyone you pick gets an invite first and can accept or decline before joining the sealed chat.",
               style: Txt.small(p.muted),
             ),
           ),
-          SectionLabel('People'),
+          SectionLabel('Invite (optional)', trailing: _picked.isEmpty ? null : Text('${_picked.length} picked', style: Txt.mono(p.muted, size: 11))),
+          if (people.where((x) => !x.blocked).isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
+              child: Text('No contacts yet. Create the group and share an invite later.', style: Txt.small(p.muted)),
+            ),
           for (final x in people.where((x) => !x.blocked))
             CheckboxListTile(
               value: _picked.contains(x.id),
@@ -72,8 +80,8 @@ class _NewGroupScreenState extends ConsumerState<NewGroupScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: Space.gutter),
             child: FilledButton(
-              onPressed: _picked.isEmpty || _busy ? null : _create,
-              child: Text(_busy ? 'Creating…' : 'Create and invite'),
+              onPressed: _name.text.trim().isEmpty || _busy ? null : _create,
+              child: Text(_busy ? 'Creating…' : (_picked.isEmpty ? 'Create group' : 'Create and invite ${_picked.length}')),
             ),
           ),
         ],

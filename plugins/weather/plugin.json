@@ -1,0 +1,10 @@
+{
+  "id": "weather",
+  "name": "Weather",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "Live weather at the top of your feed, from Open-Meteo. Pick your city on its page.",
+  "icon": "sun",
+  "permissions": ["net", "ui", "storage"],
+  "main": "main.js"
+}

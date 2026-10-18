@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mentos/core/crypto/crypto.dart';
 import 'package:mentos/data/models.dart';
 import 'package:mentos/net/engine.dart';
 import 'package:mentos/net/market/market.dart';
@@ -304,16 +303,101 @@ void main() {
     expect(jsonEncode(bench).length, lessThan(4000));
   });
 
-  test('free packs install and executable packs are refused', () async {
-    final owner = await person();
-    final pack = Market.starterPacks.first;
-    await owner.installPlugin({...pack, 'body': pack['pack'], 'minor': 0, 'from': ''});
-    expect(owner.installedStickers(), contains('🙌'));
-    owner.removePlugin('builtin:celebrate');
-    expect(owner.installedStickers(), isEmpty);
-    expect(
-      () => owner.installPlugin({'id': 'bad', 'plugin': 'script', 'body': {'code': 'x'}}),
-      throwsArgumentError,
-    );
+  test('plugin listings pin a script, reach everyone and are paid once', () async {
+    final [dev, user] = await people(2);
+    final body = {
+      'title': 'Dice',
+      'about': 'Roll dice in chat',
+      'price': 150,
+      'manifest': 'https://raw.githubusercontent.com/dagmawibabi/mentos/main/plugins/dice/plugin.json',
+      'pluginId': 'dice',
+      'version': '1.0.0',
+      'sha256': 'a' * 64,
+      'permissions': ['commands'],
+      'icon': 'casino',
+    };
+    await expectLater(dev.market!.publish(Kinds.plugin, {...body, 'manifest': 'http://insecure.example/p.json'}), throwsA(anything));
+    await expectLater(dev.market!.publish(Kinds.plugin, {...body, 'sha256': 'nope'}), throwsA(anything));
+    final l = await dev.market!.publish(Kinds.plugin, body);
+    await soon(() => user.market!.pluginListings().any((x) => x.id == l.id));
+    final seen = user.market!.listing(l.id)!;
+    expect(user.market!.pluginPaid(seen), isFalse);
+    final before = dev.coin!.balance();
+    await user.market!.buyPlugin(seen);
+    expect(user.market!.pluginPaid(seen), isTrue);
+    await soon(() => dev.coin!.balance() > before);
+    // Buying again never charges twice.
+    final paid = user.coin!.balance();
+    await user.market!.buyPlugin(seen);
+    expect(user.coin!.balance(), paid);
+  });
+
+  test('sandbox: rent by the hour, upload, run scripts, download, end with a refund', () async {
+    final [host, renter] = await people(2);
+    final offer = await host.market!.publish(Kinds.resource, {
+      'title': 'Spare laptop',
+      'sandbox': {'perHour': 20, 'mb': 4, 'maxHours': 24, 'slots': 2},
+      'bench': {'score': 100},
+    });
+    await soon(() => renter.market!.listing(offer.id) != null);
+    final r = await renter.market!.rentBox(renter.market!.listing(offer.id)!, hours: 3);
+    final bid = r['bid'] as String;
+    await soon(() => renter.market!.boxStage(renter.market!.box(bid)!) == 'active');
+    expect(host.market!.boxStage(host.market!.box(bid)!), 'active');
+
+    final dir = await Directory.systemTemp.createTemp('mentos-box-');
+    final csv = File('${dir.path}/data.csv')..writeAsStringSync('a,1\nb,2\nc,3\n');
+    await renter.market!.putInBox(bid, csv);
+    await soon(() => (renter.market!.box(bid)!['files'] as List).any((f) => f['name'] == 'data.csv' && f['pending'] != true));
+
+    final rid = await renter.market!.runInBox(bid, r'''
+      const rows = box.read("data.csv").trim().split("\n").map(l => Number(l.split(",")[1]));
+      box.write("sum.txt", String(rows.reduce((a, b) => a + b, 0)));
+      log("rows", rows.length);
+      return { sum: rows.reduce((a, b) => a + b, 0) };
+    ''');
+    Map? run() => (renter.market!.box(bid)!['runs'] as List).whereType<Map>().where((x) => x['rid'] == rid).firstOrNull;
+    await soon(() => run()?['state'] == 'done');
+    expect(run()!['result'], {'sum': 6});
+    expect(run()!['logs'], ['rows 3']);
+    expect((renter.market!.box(bid)!['files'] as List).map((f) => f['name']), contains('sum.txt'));
+
+    // Files written on the host come back on request.
+    File? got = await renter.market!.getFromBox(bid, 'sum.txt');
+    await soon(() => (renter.market!.box(bid)!['files'] as List).any((f) => f['name'] == 'sum.txt' && f['ref'] != null));
+    got = await renter.market!.getFromBox(bid, 'sum.txt');
+    expect(got!.readAsStringSync(), '6');
+
+    // Scripts stay inside the workspace and inside their budget.
+    final escape = await renter.market!.runInBox(bid, 'box.read("../../secret.txt")');
+    await soon(() => (renter.market!.box(bid)!['runs'] as List).whereType<Map>().any((x) => x['rid'] == escape && x['state'] == 'failed'));
+    final loop = await renter.market!.runInBox(bid, 'while (true) {}');
+    await soon(() => (renter.market!.box(bid)!['runs'] as List).whereType<Map>().any((x) => x['rid'] == loop && x['state'] == 'failed'));
+    final big = await renter.market!.runInBox(bid, 'box.write("big.txt", "x".repeat(900000)); box.append("big.txt", "x".repeat(900000)); box.append("big.txt", "x".repeat(900000)); box.append("big.txt", "x".repeat(900000)); box.append("big.txt", "x".repeat(900000))');
+    await soon(() => (renter.market!.box(bid)!['runs'] as List).whereType<Map>().any((x) => x['rid'] == big && x['state'] != 'running'));
+    expect((renter.market!.box(bid)!['runs'] as List).whereType<Map>().firstWhere((x) => x['rid'] == big)['error'], contains('full'));
+
+    final before = renter.coin!.balance();
+    await renter.market!.endBox(bid);
+    await soon(() => host.market!.boxStage(host.market!.box(bid)!) == 'ended');
+    await soon(() => renter.coin!.balance() > before, );
+    expect(host.market!.boxDir(bid).existsSync(), isFalse, reason: 'the host deletes the workspace');
+    await dir.delete(recursive: true);
+  });
+
+  test('sandbox demo runs the sample scripts on this device for free', () async {
+    final me = await person();
+    final r = me.market!.startDemoBox();
+    final bid = r['bid'] as String;
+    expect((me.market!.box(bid)!['files'] as List).map((f) => f['name']), containsAll(['hello.txt', 'scores.csv', 'notes.json']));
+    for (final code in Sandboxes.sampleScripts.values) {
+      final rid = await me.market!.runInBox(bid, code, args: {'limit': 500});
+      await soon(() => (me.market!.box(bid)!['runs'] as List).whereType<Map>().any((x) => x['rid'] == rid && x['state'] != 'running'));
+      final run = (me.market!.box(bid)!['runs'] as List).whereType<Map>().firstWhere((x) => x['rid'] == rid);
+      expect(run['state'], 'done', reason: '${run['error']}');
+    }
+    expect((me.market!.box(bid)!['files'] as List).map((f) => f['name']), contains('report.txt'));
+    await me.market!.endBox(bid);
+    expect(me.market!.boxStage(me.market!.box(bid)!), 'ended');
   });
 }

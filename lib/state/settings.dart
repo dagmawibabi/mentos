@@ -32,6 +32,8 @@ class Settings {
     this.keepAlive = true,
     this.accent = 'emerald',
     this.devMode = false,
+    this.devLan = false,
+    this.devToken = '',
     this.showFeedTab = true,
     this.showWalletTab = true,
   });
@@ -107,6 +109,12 @@ class Settings {
   /// Localhost API, logs, and extra network detail.
   final bool devMode;
 
+  /// Developer API also answers other devices on the local network.
+  final bool devLan;
+
+  /// Access code browsers and scripts must present to the developer API.
+  final String devToken;
+
   /// Feed icon in the bottom bar. The feed route still exists.
   final bool showFeedTab;
 
@@ -148,6 +156,8 @@ class Settings {
     bool? keepAlive,
     String? accent,
     bool? devMode,
+    bool? devLan,
+    String? devToken,
     bool? showFeedTab,
     bool? showWalletTab,
   }) =>
@@ -180,6 +190,8 @@ class Settings {
         keepAlive: keepAlive ?? this.keepAlive,
         accent: accent ?? this.accent,
         devMode: devMode ?? this.devMode,
+        devLan: devLan ?? this.devLan,
+        devToken: devToken ?? this.devToken,
         showFeedTab: showFeedTab ?? this.showFeedTab,
         showWalletTab: showWalletTab ?? this.showWalletTab,
       );
@@ -213,6 +225,8 @@ class Settings {
         'bg': keepAlive,
         'accent': accent,
         'dev': devMode,
+        'devLan': devLan,
+        'devTok': devToken,
         'navFeed': showFeedTab,
         'navWallet': showWalletTab,
       });
@@ -250,6 +264,8 @@ class Settings {
         keepAlive: j['bg'] is bool ? j['bg'] as bool : true,
         accent: const {'emerald', 'blue', 'amber', 'ink'}.contains(j['accent']) ? j['accent'] as String : 'emerald',
         devMode: j['dev'] == true,
+        devLan: j['devLan'] == true,
+        devToken: j['devTok'] is String ? j['devTok'] as String : '',
         showFeedTab: j['navFeed'] != false,
         showWalletTab: j['navWallet'] != false,
       );

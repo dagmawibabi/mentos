@@ -11,6 +11,7 @@ import '../data/media_store.dart';
 import '../data/models.dart';
 import '../state/settings.dart';
 import 'link_preview.dart';
+import 'atlas.dart';
 import 'live_loc.dart';
 import 'market/market.dart';
 import 'pay/coin.dart';
@@ -72,6 +73,10 @@ class Engine {
   Settings _settings;
   CoinLedger? _coin;
   Market? _market;
+  Atlas? _atlas;
+
+  /// Every node and relay heard on the network. Null until [start].
+  Atlas? get atlas => _atlas;
 
   /// The shared Mentos ledger. Null until [start] has begun.
   CoinLedger? get coin => _coin;
@@ -108,6 +113,11 @@ class Engine {
   /// Everything that may deserve an operating-system notification. The
   /// listener decides, using the person's notification settings.
   Stream<OsNote> get notes => _notes.stream;
+
+  final _incoming = StreamController<({String id, String scope, String author, String text})>.broadcast();
+
+  /// Chat messages from other people as they arrive, for plugins.
+  Stream<({String id, String scope, String author, String text})> get incoming => _incoming.stream;
 
   final _callSignals =
       StreamController<({String from, Map<String, dynamic> m})>.broadcast();
@@ -225,6 +235,7 @@ class Engine {
   Future<void> start(String dataDir) async {
     _coin ??= CoinLedger(this);
     _market ??= Market(this);
+    _atlas ??= Atlas(this);
     try {
       await _coin!.ensureGrant();
     } catch (_) {}
@@ -306,6 +317,7 @@ class Engine {
     try {
       await _coin?.join();
       await _market?.join();
+      await _atlas?.join();
     } catch (_) {}
   }
 
@@ -388,6 +400,7 @@ class Engine {
     try {
       await _coin?.join();
       await _market?.join();
+      await _atlas?.join();
       await _joinFeedTopic(me.id, const []);
       for (final p in db.peers().where((p) => p.iFollow && !p.blocked)) {
         await _joinFeedTopic(p.id, [p.id]);
@@ -405,6 +418,11 @@ class Engine {
   Future<void> stop() async {
     _running = false;
     _held = true;
+    final atlas = _atlas;
+    if (atlas != null) {
+      await atlas.dispose();
+      _atlas = null;
+    }
     final market = _market;
     if (market != null) {
       await market.dispose();
@@ -460,7 +478,7 @@ class Engine {
     db.setKv('settings', s.encode());
     if (profileChanged) {
       final p = myProfile;
-      unawaited(updateProfile(name: p.name, bio: p.bio, avatar: p.avatar));
+      unawaited(updateProfile(name: p.name, bio: p.bio, avatar: p.avatar, cover: p.cover));
       if (!s.keepPosts) unawaited(_broadcastRevoke(Scope.feed(me.id)));
     }
     if (rebind && _running) unawaited(_rebind());
@@ -686,6 +704,7 @@ class Engine {
           _heard(peer);
           if (topic == Coin.topic) unawaited(_coin?.onPeer(peer));
           if (topic == Market.topic) unawaited(_market?.onPeer(peer));
+          if (topic == Atlas.topic) unawaited(_atlas?.announce());
         }
         _emit({Ch.net, Ch.presence});
       case StatusEvent():
@@ -1026,6 +1045,7 @@ class Engine {
     unawaited(_retrySync(peer));
     unawaited(_coin?.onPeer(peer));
     unawaited(_market?.onPeer(peer));
+    unawaited(_atlas?.onPeer(peer));
   }
 
   Future<void> _hello(String peer, {bool reply = false}) async {
@@ -1779,6 +1799,12 @@ class Engine {
       }
       return;
     }
+    if (topic == Atlas.topic) {
+      final m = _decode(data);
+      final atlas = _atlas;
+      if (m != null && atlas != null) await atlas.onGossip(from, m);
+      return;
+    }
     if (topic == Market.topic) {
       final m = _decode(data);
       final market = _market;
@@ -2149,6 +2175,7 @@ class Engine {
         }
         if (e.author != me.id) {
           final text = (e.body['text'] as String?)?.trim() ?? '';
+          if (!_incoming.isClosed) _incoming.add((id: e.id, scope: e.scope, author: e.author, text: text));
           final gid = type == 'gdm'
               ? Scope.parts(e.scope).elementAtOrNull(1)
               : null;
@@ -2734,6 +2761,7 @@ class Engine {
     required String name,
     required String bio,
     MediaRef? avatar,
+    MediaRef? cover,
   }) async {
     for (final old
         in db.itemsInScope(Scope.profile(me.id)).where((i) => i.owned)) {
@@ -2743,6 +2771,7 @@ class Engine {
       'name': name.trim(),
       'bio': bio.trim(),
       'avatar': ?avatar?.toJson(),
+      'cover': ?cover?.toJson(),
       'keepPosts': _settings.keepPosts,
       'discoverable': _settings.discoverable,
     }, keep: _settings.keepProfile);
@@ -2940,10 +2969,12 @@ class Engine {
     }, keep: keep);
   }
 
-  Future<void> react(String scope, String target, String? emoji) => _publish(
+  /// Adds [emoji] to this phone's reactions on [target], or with
+  /// `on: false` takes it back. A null emoji clears every reaction.
+  Future<void> react(String scope, String target, String? emoji, {bool on = true}) => _publish(
     K.react,
     scope,
-    {'target': target, 'emoji': emoji ?? '', 'on': emoji != null},
+    {'target': target, 'emoji': emoji ?? '', 'on': emoji != null && on},
     keep: true,
   );
 
@@ -3036,6 +3067,16 @@ class Engine {
 
   void clearActivity() {
     db.clearActivity();
+    _emit({Ch.activity});
+  }
+
+  void deleteActivity(String id) {
+    db.deleteActivity(id);
+    _emit({Ch.activity});
+  }
+
+  void setActivitySeen(String id, bool seen) {
+    db.markOneActivitySeen(id, seen);
     _emit({Ch.activity});
   }
 
@@ -3757,7 +3798,7 @@ class Engine {
         item: m,
         text: ed?.text ?? (rawText is String ? rawText : ''),
         media: MediaRef.listFrom(m.body['media']),
-        reactions: f.reactions[m.id] ?? const {},
+        reactions: f.reactionSets[m.id] ?? const {},
         edited: ed != null,
         mine: mine,
         replyTo: replyId == null ? null : views[replyId],
@@ -4370,7 +4411,7 @@ class Engine {
               state: XferState.done,
               started: (m['started'] as num?)?.toInt() ?? 0,
               done: (m['size'] as num?)?.toInt() ?? 0,
-            ),
+            )..finished = (m['finished'] as num?)?.toInt(),
           );
         }
       }
@@ -4398,6 +4439,7 @@ class Engine {
       'key': x.media.key,
       'dir': x.dir.name,
       'started': x.started,
+      'finished': x.finished ?? nowMs(),
     });
     if (list.length > 40) list = list.sublist(0, 40);
     db.setKv('xfer_done', jsonEncode(list));
@@ -4638,7 +4680,10 @@ class Engine {
               (x) => x.dir == XferDir.inbound && x.state == XferState.queued,
             )
             .toList()
-          ..sort((a, b) => a.started.compareTo(b.started));
+          ..sort((a, b) {
+            if (a.priority != b.priority) return a.priority ? -1 : 1;
+            return a.started.compareTo(b.started);
+          });
     for (final x in waiting) {
       if (running >= limit) break;
       running++;
@@ -4676,9 +4721,82 @@ class Engine {
     _emit({Ch.xfers});
   }
 
+  /// Stops a download without telling the sender, so it can resume later.
+  /// Resuming starts the file again from the beginning.
+  Future<void> pauseTransfer(String id) async {
+    final x = _xfers[id];
+    if (x == null || x.dir != XferDir.inbound) return;
+    if (x.state != XferState.active && x.state != XferState.queued) return;
+    final wasActive = x.state == XferState.active;
+    x.state = XferState.paused;
+    x.bps = 0;
+    if (wasActive) await net.cancelFetch(x.media.hash);
+    _emit({Ch.xfers});
+  }
+
+  void resumeTransfer(String id) {
+    final x = _xfers[id];
+    if (x == null || x.state != XferState.paused) return;
+    x.state = XferState.queued;
+    x.done = 0;
+    _pumpInbound();
+  }
+
+  /// Moves a queued download to the front of the line.
+  void prioritizeTransfer(String id) {
+    final x = _xfers[id];
+    if (x == null) return;
+    x.priority = !x.priority;
+    _pumpInbound();
+  }
+
+  /// Forgets one transfer that is no longer moving.
+  void removeTransfer(String id) {
+    final x = _xfers[id];
+    if (x != null && x.moving && x.state != XferState.paused) return;
+    _xfers.remove(id);
+    _forgetKeptTransfers((m) => m['id'] == id);
+    _emit({Ch.xfers});
+  }
+
+  void _forgetKeptTransfers(bool Function(Map) drop) {
+    try {
+      final d = jsonDecode(db.getKv('xfer_done') ?? '[]');
+      if (d is! List) return;
+      db.setKv('xfer_done', jsonEncode([for (final m in d) if (m is Map && !drop(m)) m]));
+    } catch (_) {}
+  }
+
+  Future<void> pauseAllTransfers() async {
+    for (final x in _xfers.values.toList()) {
+      await pauseTransfer(x.id);
+    }
+  }
+
+  void resumeAllTransfers() {
+    for (final x in _xfers.values.where((x) => x.state == XferState.paused).toList()) {
+      x.state = XferState.queued;
+      x.done = 0;
+    }
+    _pumpInbound();
+  }
+
+  Future<void> retryFailedTransfers() async {
+    for (final x in _xfers.values.where((x) => x.state == XferState.failed).toList()) {
+      await retryTransfer(x.id);
+    }
+  }
+
+  Future<void> cancelAllTransfers() async {
+    for (final x in _xfers.values.where((x) => x.moving).toList()) {
+      await cancelTransfer(x.id);
+    }
+  }
+
   /// Forgets finished, failed, declined and cancelled transfers.
   void clearFinishedTransfers() {
     _xfers.removeWhere((_, x) => !x.moving);
+    _forgetKeptTransfers((_) => true);
     _emit({Ch.xfers});
   }
 
@@ -4766,6 +4884,7 @@ class Engine {
           return;
         x.done = x.total;
         x.state = XferState.done;
+        x.finished = nowMs();
         _keepTransfer(x);
         _emit({Ch.xfers});
       case 'fail':
@@ -4792,7 +4911,7 @@ class Engine {
         sources: [x.peer],
         origin: 'cache',
         onProgress: (done, total) {
-          if (x.state == XferState.cancelled) return;
+          if (x.state == XferState.cancelled || x.state == XferState.paused) return;
           x.bump(done);
           _peerBps[x.peer] = x.bps;
           _emit({Ch.xfers, Ch.alerts});
@@ -4807,7 +4926,7 @@ class Engine {
           );
         },
       );
-      if (x.state != XferState.cancelled) {
+      if (x.state != XferState.cancelled && x.state != XferState.paused) {
         if (file == null) {
           x.state = XferState.failed;
           x.error = 'unreachable';
@@ -4820,12 +4939,13 @@ class Engine {
         } else {
           x.done = x.total;
           x.state = XferState.done;
+          x.finished = nowMs();
           _keepTransfer(x);
           await _send(x.peer, {'t': 'xfer', 'op': 'done', 'id': x.id});
         }
       }
     } catch (e) {
-      if (x.state != XferState.cancelled) {
+      if (x.state != XferState.cancelled && x.state != XferState.paused) {
         x.state = XferState.failed;
         x.error = '$e';
         await _send(x.peer, {

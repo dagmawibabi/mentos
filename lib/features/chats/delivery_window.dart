@@ -46,7 +46,7 @@ class MessageDeliveryProgress extends StatelessWidget {
     final count = message.mine ? deliveryMilestone(message.delivery) : 4;
     return Semantics(
       button: true,
-      label: '$caption. Open message delivery details',
+      label: '$caption${message.recipients.length > 1 ? ', $received of ${message.recipients.length}' : ''}. Open message delivery details',
       child: Material(
         color: Colors.transparent,
         child: InkWell(
@@ -79,17 +79,6 @@ class MessageDeliveryProgress extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 7),
-                Flexible(
-                  child: Text(caption, style: Txt.mono(p.muted, size: 10.5)),
-                ),
-                if (message.recipients.length > 1) ...[
-                  const SizedBox(width: 5),
-                  Text(
-                    '$received/${message.recipients.length}',
-                    style: Txt.mono(p.muted, size: 10.5),
-                  ),
-                ],
                 const SizedBox(width: 4),
                 Icon(Icons.chevron_right_rounded, size: 14, color: p.faint),
               ],

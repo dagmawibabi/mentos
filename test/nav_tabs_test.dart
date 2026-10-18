@@ -70,6 +70,8 @@ void main() {
     );
     await tester.pump();
 
+    await tester.tap(find.text('Appearance'));
+    await tester.pumpAndSettle();
     expect(find.text('Feed tab'), findsOneWidget);
     expect(find.text('Wallet tab'), findsOneWidget);
     await tester.tap(find.text('Feed tab'));
@@ -77,7 +79,7 @@ void main() {
     await tester.tap(find.text('Wallet tab'));
     await tester.pump();
 
-    final settings = ProviderScope.containerOf(tester.element(find.byType(SettingsScreen))).read(settingsProvider);
+    final settings = ProviderScope.containerOf(tester.element(find.text('Feed tab'))).read(settingsProvider);
     expect(settings.showFeedTab, isFalse);
     expect(settings.showWalletTab, isFalse);
   });

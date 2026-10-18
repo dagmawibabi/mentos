@@ -78,6 +78,29 @@ class Palette {
     isDark: true,
   );
 
+  /// Applies colors a theme plugin set, by field name.
+  Palette withOverrides(Map<String, Color> o) {
+    if (o.isEmpty) return this;
+    return Palette(
+      bg: o['bg'] ?? bg,
+      surface: o['surface'] ?? surface,
+      raised: o['raised'] ?? raised,
+      line: o['line'] ?? line,
+      ink: o['ink'] ?? ink,
+      inkSoft: o['inkSoft'] ?? inkSoft,
+      muted: o['muted'] ?? muted,
+      faint: o['faint'] ?? faint,
+      accent: o['accent'] ?? accent,
+      accentInk: o['accentInk'] ?? accentInk,
+      accentSoft: o['accentSoft'] ?? accentSoft,
+      danger: o['danger'] ?? danger,
+      dangerSoft: dangerSoft,
+      bubbleMine: o['bubbleMine'] ?? bubbleMine,
+      bubbleMineInk: o['bubbleMineInk'] ?? bubbleMineInk,
+      isDark: isDark,
+    );
+  }
+
   /// Recolors the live accent. Surfaces stay the same.
   Palette withAccent(String name) {
     if (name == 'emerald' || name.isEmpty) return this;

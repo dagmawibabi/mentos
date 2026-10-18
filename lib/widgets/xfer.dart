@@ -65,144 +65,226 @@ class ProgressMeter extends StatelessWidget {
   }
 }
 
+/// One file moving to or from someone, with a preview when this phone has
+/// the bytes and the controls that fit its state.
 class XferTile extends ConsumerWidget {
-  const XferTile({super.key, required this.x});
+  const XferTile({super.key, required this.x, this.showPeer = true});
   final FileTransfer x;
+  final bool showPeer;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = context.pal;
     final e = ref.read(engineProvider);
-    final name = e.nameOf(x.peer);
-    final label = switch (x.state) {
-      XferState.offer =>
-        x.dir == XferDir.inbound ? 'waiting for you' : 'waiting for them',
-      XferState.queued => 'queued, starts when a slot frees',
-      XferState.active => 'moving',
-      XferState.done => 'complete',
-      XferState.failed => x.error ?? 'failed',
-      XferState.declined => 'declined',
-      XferState.cancelled => 'cancelled',
+    final inbound = x.dir == XferDir.inbound;
+    final (label, fg, bg) = switch (x.state) {
+      XferState.offer => (inbound ? 'Wants to send' : 'Waiting for them', p.ink, p.raised),
+      XferState.queued => (x.priority ? 'Next in line' : 'Queued', p.inkSoft, p.raised),
+      XferState.active => (inbound ? 'Receiving' : 'Sending', p.accent, p.accentSoft),
+      XferState.paused => ('Paused', p.inkSoft, p.raised),
+      XferState.done => (inbound ? 'Received' : 'Sent', p.accent, p.accentSoft),
+      XferState.failed => ('Failed', p.danger, p.dangerSoft),
+      XferState.declined => ('Declined', p.muted, p.raised),
+      XferState.cancelled => ('Cancelled', p.muted, p.raised),
     };
+    final when = x.finished ?? x.started;
+    final eta = x.state == XferState.active && x.bps > 0 && x.total > x.done
+        ? _eta((x.total - x.done) ~/ x.bps)
+        : null;
+
+    Future<void> open() async {
+      final f = inbound
+          ? await e.media.export(x.media, sources: [x.peer])
+          : (e.media.cached(x.media) ?? await e.media.export(x.media));
+      if (!context.mounted) return;
+      if (f == null) {
+        toast(context, 'The file is not on this phone any more');
+        return;
+      }
+      await showLocalFile(context, f, name: x.media.name, mime: x.media.mime);
+    }
+
+    final actions = <Widget>[
+      if (x.state == XferState.offer && inbound) ...[
+        _Act('Decline', Icons.close_rounded, () => e.respondTransfer(x.id, false)),
+        _Act('Receive', Icons.download_rounded, () => e.respondTransfer(x.id, true), primary: true),
+      ],
+      if (x.state == XferState.queued && inbound)
+        _Act(x.priority ? 'Not first' : 'Start next', Icons.vertical_align_top_rounded, () => e.prioritizeTransfer(x.id)),
+      if ((x.state == XferState.active || x.state == XferState.queued) && inbound)
+        _Act('Pause', Icons.pause_rounded, () => e.pauseTransfer(x.id)),
+      if (x.state == XferState.paused)
+        _Act('Resume', Icons.play_arrow_rounded, () => e.resumeTransfer(x.id), primary: true),
+      if (x.moving && !(x.state == XferState.offer && inbound))
+        _Act('Cancel', Icons.stop_rounded, () => e.cancelTransfer(x.id), danger: true),
+      if (x.state == XferState.done) ...[
+        _Act('Open', Icons.visibility_outlined, open, primary: true),
+        if (inbound)
+          _Act('Save', Icons.save_alt_rounded, () async {
+            final f = await e.media.saveToDevice(x.media, sources: [x.peer]);
+            if (context.mounted) toast(context, f == null ? 'Could not save' : 'Saved to ${f.path}');
+          }),
+      ],
+      if (x.state == XferState.failed || x.state == XferState.cancelled)
+        _Act('Retry', Icons.refresh_rounded, () => e.retryTransfer(x.id), primary: true),
+      if (!x.moving || x.state == XferState.paused)
+        _Act('Remove', Icons.delete_outline_rounded, () => e.removeTransfer(x.id)),
+    ];
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.gutter, 8, Space.gutter, 8),
+      padding: const EdgeInsets.fromLTRB(Space.gutter, 6, Space.gutter, 6),
       child: Container(
         padding: const EdgeInsets.all(Space.md),
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(
-            color: x.state == XferState.active ? p.accent : p.line,
-          ),
+          color: p.surface,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: x.state == XferState.active ? p.accent.withValues(alpha: .6) : p.line),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(fileIcon(x.media.mime), size: 20, color: p.inkSoft),
-                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: x.state == XferState.done ? open : null,
+                  child: _XferThumb(x: x),
+                ),
+                const SizedBox(width: Space.md),
                 Expanded(
-                  child: Text(
-                    x.media.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Txt.bodyStrong(p.ink),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(x.media.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: Txt.bodyStrong(p.ink)),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(inbound ? Icons.south_west_rounded : Icons.north_east_rounded, size: 12, color: p.muted),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text(
+                              [
+                                if (showPeer) '${inbound ? 'from' : 'to'} ${e.nameOf(x.peer)}',
+                                bytes(x.media.size),
+                                timeAgo(when),
+                              ].join(' · '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Txt.small(p.muted),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                Text(
-                  x.dir == XferDir.out ? 'out' : 'in',
-                  style: Txt.mono(p.faint, size: 10.5),
+                const SizedBox(width: Space.sm),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(Radii.pill)),
+                  child: Text(label, style: Txt.mono(fg, size: 10.5, w: FontWeight.w500)),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              '$name · ${bytes(x.media.size)} · $label',
-              style: Txt.mono(p.muted, size: 11),
-            ),
-            const SizedBox(height: Space.sm),
-            ProgressMeter(
-              progress: x.progress,
-              done: x.done,
-              total: x.total,
-              bps: x.bps,
-            ),
-            if (x.state == XferState.offer && x.dir == XferDir.inbound)
-              Padding(
-                padding: const EdgeInsets.only(top: Space.sm),
-                child: Row(
-                  children: [
-                    TextButton(
-                      onPressed: () => e.respondTransfer(x.id, false),
-                      child: const Text('Decline'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(0, 34),
-                      ),
-                      onPressed: () => e.respondTransfer(x.id, true),
-                      child: const Text('Receive'),
-                    ),
-                  ],
-                ),
+            if (x.state == XferState.active || x.state == XferState.queued || x.state == XferState.paused) ...[
+              const SizedBox(height: Space.md),
+              ProgressMeter(
+                progress: x.state == XferState.queued ? -1 : x.progress,
+                done: x.done,
+                total: x.total,
+                bps: x.bps,
+                label: eta == null ? null : '$eta left',
               ),
-            if (x.moving)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => e.cancelTransfer(x.id),
-                  child: Text('Cancel', style: Txt.small(p.danger)),
-                ),
-              ),
-            if (x.state == XferState.done && x.dir == XferDir.inbound)
-              Align(
-                alignment: Alignment.centerRight,
-                child: Wrap(
-                  spacing: 8,
-                  children: [
-                    TextButton(
-                      onPressed: () async {
-                        final f = await e.media.saveToDevice(
-                          x.media,
-                          sources: [x.peer],
-                        );
-                        if (context.mounted)
-                          toast(
-                            context,
-                            f == null ? 'Could not save' : 'Saved to ${f.path}',
-                          );
-                      },
-                      child: const Text('Save to device'),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        final f = await e.media.export(
-                          x.media,
-                          sources: [x.peer],
-                        );
-                        if (f == null || !context.mounted) return;
-                        await showLocalFile(context, f, name: x.media.name, mime: x.media.mime);
-                      },
-                      child: const Text('Open'),
-                    ),
-                  ],
-                ),
-              ),
-            if (x.state == XferState.failed || x.state == XferState.cancelled)
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: () => e.retryTransfer(x.id),
-                  icon: const Icon(Icons.refresh_rounded, size: 16),
-                  label: const Text('Retry'),
-                ),
-              ),
+            ],
+            if (x.state == XferState.failed && x.error != null && x.error != 'cancelled') ...[
+              const SizedBox(height: 6),
+              Text(x.error!, style: Txt.small(p.danger)),
+            ],
+            if (x.state == XferState.paused) ...[
+              const SizedBox(height: 4),
+              Text('Resuming starts the file again from the beginning.', style: Txt.small(p.faint)),
+            ],
+            if (actions.isNotEmpty) ...[
+              const SizedBox(height: Space.sm),
+              Wrap(spacing: 6, runSpacing: 6, alignment: WrapAlignment.end, children: actions),
+            ],
           ],
         ),
       ),
     );
   }
+}
+
+String _eta(int seconds) => seconds < 60
+    ? '${seconds}s'
+    : seconds < 3600
+        ? '${seconds ~/ 60}m ${seconds % 60}s'
+        : '${seconds ~/ 3600}h ${(seconds % 3600) ~/ 60}m';
+
+class _Act extends StatelessWidget {
+  const _Act(this.label, this.icon, this.onTap, {this.primary = false, this.danger = false});
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool primary;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.pal;
+    final fg = primary ? p.accentInk : (danger ? p.danger : p.ink);
+    return Material(
+      color: primary ? p.accent : p.raised,
+      borderRadius: BorderRadius.circular(Radii.pill),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(Radii.pill),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 5),
+              Text(label, style: Txt.small(fg).copyWith(fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A photo preview once this phone holds the bytes; otherwise a type icon.
+class _XferThumb extends ConsumerWidget {
+  const _XferThumb({required this.x});
+  final FileTransfer x;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = context.pal;
+    final e = ref.read(engineProvider);
+    final file = x.media.isImage ? e.media.cached(x.media) : null;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: SizedBox(
+        width: 52,
+        height: 52,
+        child: file != null
+            ? Image.file(file, fit: BoxFit.cover, errorBuilder: (_, _, _) => _icon(p))
+            : _icon(p),
+      ),
+    );
+  }
+
+  Widget _icon(Palette p) => Container(
+    color: x.media.isImage || x.media.isVideo ? p.accentSoft : p.raised,
+    alignment: Alignment.center,
+    child: Icon(
+      x.media.isVideo ? Icons.play_circle_outline_rounded : fileIcon(x.media.mime),
+      size: 24,
+      color: x.media.isImage || x.media.isVideo ? p.accent : p.inkSoft,
+    ),
+  );
 }
 
 class AlertHost extends StatelessWidget {

@@ -13,6 +13,7 @@ import 'state/providers.dart';
 import 'state/session.dart';
 import 'features/settings/dev_api.dart';
 import 'features/settings/lock_gate.dart';
+import 'plugins/plugin_providers.dart';
 import 'widgets/xfer.dart';
 
 class MentosApp extends ConsumerWidget {
@@ -30,8 +31,15 @@ class MentosApp extends ConsumerWidget {
     ref.watch(liveManagerProvider);
     ref.watch(callManagerProvider);
     ref.watch(liveShareProvider);
-    final light = buildTheme(Palette.light.withAccent(accent));
-    final dark = buildTheme(Palette.dark.withAccent(accent));
+    final pluginTheme = ref.watch(pluginThemeProvider);
+    final density = switch (ref.watch(pluginLayoutProvider).density) {
+      'compact' => VisualDensity.compact,
+      'comfortable' => VisualDensity.comfortable,
+      _ => null,
+    };
+    ThemeData dense(ThemeData t) => density == null ? t : t.copyWith(visualDensity: density);
+    final light = dense(buildTheme(Palette.light.withAccent(accent).withOverrides(pluginTheme.light)));
+    final dark = dense(buildTheme(Palette.dark.withAccent(accent).withOverrides(pluginTheme.dark)));
     // Keep the navigator out of the tree until the node is open so Feed/You
     // never call engineProvider during splash (that crashed mobile).
     if (session is SessionLoading) {
@@ -56,6 +64,7 @@ class MentosApp extends ConsumerWidget {
     }
     return MaterialApp.router(
       title: 'Mentos',
+      scaffoldMessengerKey: pluginMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: light,
       darkTheme: dark,
@@ -72,8 +81,12 @@ class MentosApp extends ConsumerWidget {
                 ),
               )
             : (child ?? const SizedBox.shrink());
+        final scale = pluginTheme.textScale;
         return MediaQuery(
-          data: media.copyWith(disableAnimations: media.disableAnimations || reduce),
+          data: media.copyWith(
+            disableAnimations: media.disableAnimations || reduce,
+            textScaler: scale == null ? media.textScaler : TextScaler.linear(media.textScaler.scale(1) * scale),
+          ),
           child: body,
         );
       },

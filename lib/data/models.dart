@@ -397,6 +397,7 @@ class Profile {
     this.name = '',
     this.bio = '',
     this.avatar,
+    this.cover,
     this.keepPosts = false,
     this.discoverable = false,
     this.ts = 0,
@@ -406,6 +407,9 @@ class Profile {
   final String name;
   final String bio;
   final MediaRef? avatar;
+
+  /// Wide header image shown above the profile.
+  final MediaRef? cover;
 
   /// Author allows followers to preserve their posts.
   final bool keepPosts;
@@ -421,6 +425,7 @@ class Profile {
         name: e.body['name'] is String ? e.body['name'] as String : '',
         bio: e.body['bio'] is String ? e.body['bio'] as String : '',
         avatar: MediaRef.fromJson(e.body['avatar']),
+        cover: MediaRef.fromJson(e.body['cover']),
         keepPosts: e.body['keepPosts'] == true,
         discoverable: e.body['discoverable'] == true,
         ts: e.ts,
@@ -847,7 +852,7 @@ class GroupInfo {
 
 enum XferDir { out, inbound }
 
-enum XferState { offer, queued, active, done, failed, declined, cancelled }
+enum XferState { offer, queued, active, paused, done, failed, declined, cancelled }
 
 class FileTransfer {
   FileTransfer({
@@ -870,12 +875,18 @@ class FileTransfer {
   final int started;
   String? error;
   int bps = 0;
+
+  /// Starts before other queued downloads.
+  bool priority = false;
+  int? finished;
   int _markAt = 0;
   int _markDone = 0;
 
   int get total => media.size;
   double get progress => total <= 0 ? 0 : (done / total).clamp(0, 1);
-  bool get moving => state == XferState.offer || state == XferState.queued || state == XferState.active;
+  bool get moving =>
+      state == XferState.offer || state == XferState.queued || state == XferState.active || state == XferState.paused;
+  bool get failed => state == XferState.failed || state == XferState.cancelled || state == XferState.declined;
 
   void bump(int n) {
     final now = nowMs();

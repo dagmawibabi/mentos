@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:crypto/crypto.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -10,6 +12,7 @@ import 'package:image/image.dart' as img;
 import 'package:mentos/core/theme/app_theme.dart';
 import 'package:mentos/core/theme/tokens.dart';
 import 'package:mentos/data/models.dart';
+import 'package:mentos/features/market/box_screen.dart';
 import 'package:mentos/features/market/cart_screen.dart';
 import 'package:mentos/features/market/deal_screens.dart';
 import 'package:mentos/features/market/hub_screen.dart';
@@ -75,7 +78,8 @@ void main() {
   testWidgets('market screens render at phone size with real data', (tester) async {
     late Directory root;
     late Engine seller, buyer;
-    late Listing mug, task;
+    late Listing mug, task, plugin, device;
+    late String demo;
     late String order;
     await tester.runAsync(() async {
       await _fonts();
@@ -126,13 +130,27 @@ void main() {
         'methods': ['Telebirr', 'CBE Birr'],
         'windowMins': 30,
       });
-      await seller.market!.publish(Kinds.resource, {
+      device = await seller.market!.publish(Kinds.resource, {
         'title': 'Spare desktop in Kazanchis',
+        'sandbox': {'perHour': 40, 'mb': 512, 'maxHours': 48, 'slots': 2},
         'storage': {'gb': 40, 'perGbDay': 2},
         'compute': {'jobs': ['gzip', 'image', 'pow'], 'perUnit': 3, 'maxMb': 64},
         'bench': {'platform': 'windows', 'cores': 12, 'score': 18400, 'cpu1': 620, 'cpuN': 1840, 'freeGb': 210, 'diskW': 900, 'diskR': 1800, 'ramMb': 16384, 'net': {'mode': 'direct', 'relayMs': 42}, 'ts': nowMs()},
       });
-      await eventually(() => buyer.market!.listings().length >= 9);
+      plugin = await seller.market!.publish(Kinds.plugin, {
+        'title': 'Dice',
+        'about': 'Roll dice, flip coins and let chance pick for you, right in any chat.',
+        'price': 150,
+        'manifest': 'https://raw.githubusercontent.com/dagmawibabi/mentos/main/plugins/dice/plugin.json',
+        'pluginId': 'dice',
+        'version': '1.0.0',
+        'sha256': sha256.convert(File('plugins/dice/main.js').readAsBytesSync()).toString(),
+        'size': File('plugins/dice/main.js').lengthSync(),
+        'permissions': ['commands'],
+        'icon': 'casino',
+        'source': 'https://github.com/dagmawibabi/mentos/tree/main/plugins/dice',
+      });
+      await eventually(() => buyer.market!.listings().length >= 10);
       for (var i = 0; i < 6; i++) {
         await buyer.market!.listing(listings[i].id)!.cover.let((c) async => buyer.media.open(c!, sources: [seller.me.id]));
       }
@@ -146,6 +164,10 @@ void main() {
       await seller.market!.acceptOrder(order);
       await seller.market!.shipOrder(order, 'Courier, arriving tomorrow');
       await eventually(() => buyer.market!.orderStage(buyer.market!.order(order)!) == 'shipped');
+      final d = buyer.market!.startDemoBox();
+      demo = d['bid'] as String;
+      final rid = await buyer.market!.runInBox(demo, Sandboxes.sampleScripts['Crunch a CSV']!);
+      await eventually(() => (buyer.market!.box(demo)!['runs'] as List).whereType<Map>().any((x) => x['rid'] == rid && x['state'] == 'done'));
       buyer.market!.addToCart(buyer.market!.listing(listings[2].id)!, qty: 2);
     });
 
@@ -174,22 +196,34 @@ void main() {
       if (!_capture) return;
       await tester.runAsync(() async {
         final boundary = key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-        final image = await boundary.toImage(pixelRatio: 1);
+        final image = await boundary.toImage(pixelRatio: double.tryParse(Platform.environment['MENTOS_CAPTURE_SCALE'] ?? '') ?? 1);
         final data = await image.toByteData(format: ui.ImageByteFormat.png);
         final out = File('build/market-previews/$name.png')..createSync(recursive: true);
         out.writeAsBytesSync(data!.buffer.asUint8List());
       });
     }
 
-    await show(const MarketScreen(), '01-shop');
+    await show(const MarketScreen(), '00-plugins');
+    expect(find.text('Make Mentos yours'), findsOneWidget);
+    expect(find.text('Dice'), findsWidgets);
+    await show(ListingScreen(id: plugin.id), '00-plugin-listing');
+    expect(find.textContaining('Get for'), findsOneWidget);
+    await show(const SellScreen(kind: Kinds.plugin), '00-plugin-sell');
+    await show(const MarketScreen(initial: MarketTab.shop), '01-shop');
     expect(find.text('Hand-glazed coffee mug'), findsWidgets);
     expect(find.text('Fresh on the network'), findsOneWidget);
-    await show(const MarketScreen(), '01-shop-dark', dark: true);
+    await show(const MarketScreen(initial: MarketTab.shop), '01-shop-dark', dark: true);
     await show(const MarketScreen(initial: MarketTab.tasks), '02-tasks');
     expect(find.text('Photograph three cafés in Piazza'), findsOneWidget);
     await show(const MarketScreen(initial: MarketTab.exchange), '03-exchange');
     await show(const MarketScreen(initial: MarketTab.resources), '04-resources');
     await show(const MarketScreen(initial: MarketTab.ads), '05-ads');
+    await show(ListingScreen(id: device.id), '04b-device');
+    expect(find.text('Rent a sandbox'), findsOneWidget);
+    await show(BoxScreen(bid: demo), '04c-sandbox');
+    expect(find.text('RESULT'), findsOneWidget);
+    await show(BoxScreen(bid: demo), '04d-sandbox-dark', dark: true);
+    await show(const SellScreen(kind: Kinds.resource), '04e-offer-device');
     await show(ListingScreen(id: mug.id), '06-item');
     expect(find.text('Choose colour to buy'), findsOneWidget, reason: 'options must be picked first');
     await show(ListingScreen(id: task.id), '07-task');
@@ -210,6 +244,21 @@ void main() {
     expect(find.text('3.50'), findsNothing);
     expect(find.text('hidden'), findsOneWidget);
     await show(const CoinWalletScreen(), '14-wallet-dark', dark: true);
+    final sent = buyer.coin!.history().firstWhere((t) => t.kind == 'send' || t.kind == 'lock', orElse: () => buyer.coin!.history().first);
+    unawaited(showTxSheet(tester.element(find.byType(CoinWalletScreen)), sent, buyer.me.id));
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pump(const Duration(milliseconds: 150));
+    }
+    if (_capture) {
+      await tester.runAsync(() async {
+        final boundary = tester.renderObject(find.byType(RepaintBoundary).first) as RenderRepaintBoundary;
+        final image = await boundary.toImage(pixelRatio: double.tryParse(Platform.environment['MENTOS_CAPTURE_SCALE'] ?? '') ?? 1);
+        final data = await image.toByteData(format: ui.ImageByteFormat.png);
+        File('build/market-previews/14b-tx-sheet.png').writeAsBytesSync(data!.buffer.asUint8List());
+      });
+    }
+    expect(find.text('Technical details'), findsOneWidget);
     await show(const LedgerScreen(), '15-ledger');
     expect(find.text('NETWORK TREASURY'), findsOneWidget);
     await show(const LedgerScreen(), '16-ledger-dark', dark: true);

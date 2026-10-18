@@ -98,18 +98,16 @@ class _ChatViewState extends ConsumerState<ChatView>
               GestureDetector(
                 onTap: () {
                   Navigator.pop(context);
-                  e.react(
-                    widget.scope,
-                    m.id,
-                    m.reactions[e.me.id] == r ? null : r,
-                  );
+                  final had = m.reactionsBy(e.me.id).contains(r);
+                  e.react(widget.scope, m.id, r, on: !had);
                 },
                 child: Container(
                   width: 46,
                   height: 46,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: m.reactions[e.me.id] == r ? p.accentSoft : p.raised,
+                    color: m.reactionsBy(e.me.id).contains(r) ? p.accentSoft : p.raised,
+                    border: m.reactionsBy(e.me.id).contains(r) ? Border.all(color: p.accent) : null,
                     shape: BoxShape.circle,
                   ),
                   child: Text(r, style: const TextStyle(fontSize: 22)),

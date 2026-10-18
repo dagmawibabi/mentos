@@ -1,0 +1,10 @@
+{
+  "id": "notes",
+  "name": "Quick notes",
+  "version": "1.0.0",
+  "author": "Mentos",
+  "description": "A private scratchpad page, kept on this device. Type /note in any chat to save a line.",
+  "icon": "note",
+  "permissions": ["storage", "ui", "commands", "notify"],
+  "main": "main.js"
+}
